@@ -13,7 +13,7 @@ import dropbox
 import pandas as pd
 import streamlit as st
 
-CACHE_TTL_SECONDS = 30  # matches the "refresh every 30 seconds" requirement
+CACHE_TTL_SECONDS = 60  # refresh every 1 minute
 
 
 def _get_client():
@@ -47,7 +47,7 @@ def _download_excel(dbx, path: str) -> pd.DataFrame:
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Refreshing data from Dropbox...")
 def load_data(_cache_buster: int = 0):
     """Returns (gps_df, firstbeat_df). Cached for CACHE_TTL_SECONDS, so the
-    app auto-refreshes on its own every 30s - `_cache_buster` lets the
+    app auto-refreshes on its own every 60s - `_cache_buster` lets the
     manual Refresh button force an immediate reload regardless of the TTL."""
     cfg = st.secrets["dropbox"]
     dbx = _get_client()
