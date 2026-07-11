@@ -51,15 +51,14 @@ st.markdown(f"""
         color: {WHITE} !important;
     }}
     .st-key-header_bar div[data-baseweb="select"] svg {{ fill: {WHITE} !important; }}
-    /* the selected-value text sits in its own inner element that likely has
-       its own background separate from the outer navy control - force that
-       inner background transparent (so the navy shows through) and keep
-       the text white, rather than guessing at a text colour against an
-       unknown background */
+    /* paint the exact selected-value element with both navy background AND
+       white text directly, rather than relying on it inheriting a colour
+       from a parent - guarantees contrast regardless of how Streamlit
+       nests/backgrounds this specific inner element */
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span {{
+        background-color: {NAVY} !important;
         color: {WHITE} !important;
-        background-color: transparent !important;
         -webkit-text-fill-color: {WHITE} !important;
     }}
 
