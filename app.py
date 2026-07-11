@@ -44,22 +44,21 @@ st.markdown(f"""
         width: 100%;
     }}
 
-    /* selectbox / slider control surfaces inside the header -> navy, white text */
-    .st-key-header_bar div[data-baseweb="select"] > div {{
-        background-color: {NAVY} !important;
-        border-color: {WHITE} !important;
-        color: {WHITE} !important;
-    }}
-    .st-key-header_bar div[data-baseweb="select"] svg {{ fill: {WHITE} !important; }}
-    /* paint the exact selected-value element with both navy background AND
-       white text directly, rather than relying on it inheriting a colour
-       from a parent - guarantees contrast regardless of how Streamlit
-       nests/backgrounds this specific inner element */
+    /* selectbox control - WHITE background with NAVY text, forced at every
+       level (outer control, inner value text, icon) so there's no chance
+       of one element's background winning while another's text colour
+       loses - guaranteed readable regardless of Streamlit's internal DOM */
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"],
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span {{
-        background-color: {NAVY} !important;
-        color: {WHITE} !important;
-        -webkit-text-fill-color: {WHITE} !important;
+        background-color: {WHITE} !important;
+        color: {NAVY} !important;
+        -webkit-text-fill-color: {NAVY} !important;
+        border-color: {NAVY} !important;
+    }}
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {{
+        fill: {NAVY} !important;
     }}
 
     /* the dropdown popover/menu that appears when you click the selectbox */
