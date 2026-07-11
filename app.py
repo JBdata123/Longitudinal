@@ -44,30 +44,15 @@ st.markdown(f"""
         width: 100%;
     }}
 
-    /* selectbox control - WHITE background with NAVY text. Confirmed via
-       dev tools that the actual text element wasn't a plain div/span (our
-       earlier attempts never matched it) - it's very likely an <input>
-       (BaseWeb often renders the display value in a readonly input for
-       accessibility). Target input explicitly, plus a universal wildcard
-       as a final catch-all so nothing can slip through unmatched again. */
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"],
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] *:not(svg):not(path) {{
-        background-color: {WHITE} !important;
-        color: {NAVY} !important;
-        -webkit-text-fill-color: {NAVY} !important;
-        border-color: {NAVY} !important;
-    }}
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {{
-        fill: {NAVY} !important;
-    }}
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] input::placeholder {{
-        color: {NAVY} !important;
-        opacity: 1 !important;
+    /* Blue background, white text, everywhere inside the selectbox -
+       maximum specificity via repeated class chaining, pure universal
+       selector, no exceptions of any kind. */
+    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] * {{
+        background-color: {NAVY} !important;
+        color: {WHITE} !important;
+        -webkit-text-fill-color: {WHITE} !important;
+        border-color: {WHITE} !important;
+        fill: {WHITE} !important;
     }}
 
     /* the dropdown popover/menu that appears when you click the selectbox */
