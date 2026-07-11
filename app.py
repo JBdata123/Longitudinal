@@ -54,6 +54,11 @@ st.markdown(f"""
         border-color: {WHITE} !important;
         fill: {WHITE} !important;
     }}
+    /* just hide the dropdown arrow icon entirely - simpler and far more
+       reliable than fighting its colour */
+    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] svg {{
+        display: none !important;
+    }}
 
     /* the dropdown popover/menu that appears when you click the selectbox */
     div[data-baseweb="popover"] ul[role="listbox"] {{
