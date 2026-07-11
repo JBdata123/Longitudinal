@@ -44,14 +44,19 @@ st.markdown(f"""
         width: 100%;
     }}
 
-    /* selectbox control - WHITE background with NAVY text, forced at every
-       level (outer control, inner value text, icon) so there's no chance
-       of one element's background winning while another's text colour
-       loses - guaranteed readable regardless of Streamlit's internal DOM */
+    /* selectbox control - WHITE background with NAVY text. Confirmed via
+       dev tools that the actual text element wasn't a plain div/span (our
+       earlier attempts never matched it) - it's very likely an <input>
+       (BaseWeb often renders the display value in a readonly input for
+       accessibility). Target input explicitly, plus a universal wildcard
+       as a final catch-all so nothing can slip through unmatched again. */
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"],
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
-    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span {{
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span,
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] input,
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] p,
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] *:not(svg):not(path) {{
         background-color: {WHITE} !important;
         color: {NAVY} !important;
         -webkit-text-fill-color: {NAVY} !important;
@@ -59,6 +64,10 @@ st.markdown(f"""
     }}
     .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] svg {{
         fill: {NAVY} !important;
+    }}
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] input::placeholder {{
+        color: {NAVY} !important;
+        opacity: 1 !important;
     }}
 
     /* the dropdown popover/menu that appears when you click the selectbox */
@@ -236,50 +245,3 @@ render_panel(
 )
 
 render_panel(
-    "HSR (Velocity Band 4 + 5) | Sprint Distance",
-    charts.chart_hsr_sd(gps_player_display, gps_player_full),
-    key="chart_hsr_sd",
-    legend_items=charts.LEGEND_HSR_SD,
-    box_note="ACWR",
-)
-
-render_panel(
-    "Accelerations (1-3) | Decelerations (1-3)",
-    charts.chart_accel_decel(
-        gps_player_display, gps_player_full,
-        "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
-    ),
-    key="chart_accel_decel_13",
-    legend_items=charts.legend_accel_decel("1-3"),
-    box_note="ACWR",
-)
-
-render_panel(
-    "Accelerations (2-3) | Decelerations (2-3)",
-    charts.chart_accel_decel(
-        gps_player_display, gps_player_full,
-        "Acceleration B2-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
-    ),
-    key="chart_accel_decel_23",
-    legend_items=charts.legend_accel_decel("2-3"),
-    box_note="ACWR",
-)
-
-render_panel(
-    "Max Speed | Max Speed %",
-    charts.chart_max_speed(gps_player_display, gps_player_full),
-    key="chart_max_speed",
-    legend_items=charts.LEGEND_MAX_SPEED,
-    box_note="Days Since 90%+",
-)
-
-if fb_player_range.empty:
-    st.info("No heart rate (Firstbeat) data found for this player in the selected date range.")
-else:
-    render_panel(
-        "Heart Rate Zone Minutes",
-        charts.chart_hr_zones(fb_player_display),
-        key="chart_hr_zones",
-        legend_items=charts.LEGEND_HR_ZONES,
-        box_note="Training Effect",
-    )
