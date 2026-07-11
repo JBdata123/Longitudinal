@@ -8,7 +8,7 @@ from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar, legend_row
 from data_loader import load_data, CACHE_TTL_SECONDS
 import charts
 
-st.set_page_config(page_title="LCWFC Longitudinal Report", layout="wide", page_icon="🦊")
+st.set_page_config(page_title="LCWFC Longitudinal Report", layout="wide")
 
 # ---------------------------------------------------------------- global CSS
 st.markdown(f"""
@@ -132,7 +132,7 @@ if "authenticated" not in st.session_state:
 if not st.session_state.authenticated:
     st.markdown(
         "<div style='text-align:center; margin-top:80px;'>"
-        "<h2>🦊 LCWFC Longitudinal Report</h2>"
+        "<h2>LCWFC Longitudinal Report</h2>"
         "<p>Enter the password to continue.</p></div>",
         unsafe_allow_html=True,
     )
@@ -235,7 +235,7 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
         ],
         "toImageButtonOptions": {"format": "png", "filename": key, "scale": 2},
     }
-    st.plotly_chart(fig, width="stretch", config=plot_config, key=key)
+    st.plotly_chart(fig, width="stretch", config=plot_config, key=key, theme=None)
 
 render_panel(
     "Total Distance | Metres per Minute",
