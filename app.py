@@ -1,4 +1,5 @@
-import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -7,7 +8,7 @@ from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar, legend_row
 from data_loader import load_data, CACHE_TTL_SECONDS
 import charts
 
-st.set_page_config(page_title="LCFC Longitudinal Report", layout="wide", page_icon="🦊")
+st.set_page_config(page_title="LCWFC Longitudinal Report", layout="wide", page_icon="🦊")
 
 # ---------------------------------------------------------------- global CSS
 st.markdown(f"""
@@ -131,7 +132,7 @@ if "authenticated" not in st.session_state:
 if not st.session_state.authenticated:
     st.markdown(
         "<div style='text-align:center; margin-top:80px;'>"
-        "<h2>🦊 LCFC Longitudinal Report</h2>"
+        "<h2>🦊 LCWFC Longitudinal Report</h2>"
         "<p>Enter the password to continue.</p></div>",
         unsafe_allow_html=True,
     )
@@ -182,6 +183,36 @@ with st.container(key="header_bar", border=True):
         )
     with refresh_col:
         with st.container(key="refresh_box", border=True):
+            st.markdown(
+                """
+                <button onclick="
+                    (function() {
+                        function exportAll(doc) {
+                            var found = 0;
+                            doc.querySelectorAll('.js-plotly-plot').forEach(function(gd, i) {
+                                if (window.Plotly || (gd.ownerDocument.defaultView && gd.ownerDocument.defaultView.Plotly)) {
+                                    var PlotlyRef = (gd.ownerDocument.defaultView && gd.ownerDocument.defaultView.Plotly) || window.Plotly;
+                                    PlotlyRef.downloadImage(gd, {format: 'png', filename: 'chart_' + (i + 1)});
+                                    found++;
+                                }
+                            });
+                            return found;
+                        }
+                        var total = exportAll(document);
+                        document.querySelectorAll('iframe').forEach(function(f) {
+                            try { total += exportAll(f.contentDocument); } catch (e) {}
+                        });
+                        if (total === 0) alert('No charts found to export - try again once the page has fully loaded.');
+                    })();
+                " style="
+                    width:100%; padding:0.4rem 0.6rem; margin-bottom:6px;
+                    background-color:#003090; color:#FFFFFF; border:1px solid #FFFFFF;
+                    border-radius:6px; font-family:'Segoe UI',Arial,sans-serif;
+                    font-size:14px; cursor:pointer;
+                ">📷 Export charts as PNG</button>
+                """,
+                unsafe_allow_html=True,
+            )
             if st.button("🔄 Refresh data now"):
                 st.session_state.cache_buster += 1
                 load_data.clear()
@@ -189,7 +220,7 @@ with st.container(key="header_bar", border=True):
             st.markdown(
                 f"<div style='font-size:10.5px; opacity:0.85; margin-top:4px; "
                 f"margin-bottom:2px; white-space:nowrap; text-align:center;'>"
-                f"Auto-refreshes every {CACHE_TTL_SECONDS}s · last loaded {time.strftime('%H:%M:%S')}</div>",
+                f"Auto-refreshes every {CACHE_TTL_SECONDS}s · last loaded {datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK</div>",
                 unsafe_allow_html=True,
             )
 
