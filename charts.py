@@ -61,28 +61,53 @@ def _bold_labels_masked(values, has_data, fmt="{:.0f}"):
     return [bold(fmt.format(v)) if had else "" for v, had in zip(values, has_data)]
 
 
+def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float, dates_shown):
+    """For each date, counts calendar days since that metric last hit >=
+    threshold (0 on the day it's hit, then 1, 2, 3... on every day after,
+    including rest days, until it's hit again). Returns None for any date
+    before the metric has ever been hit in the player's known history, since
+    we can't truthfully claim a 'days since' figure without a real reference
+    point."""
+    s = full_history.set_index("Date")[col].sort_index()
+    full_idx = pd.date_range(s.index.min(), s.index.max(), freq="D")
+    s = s.reindex(full_idx)  # NaN on rest/no-session days
+
+    counter = None
+    daily_counts = {}
+    for d in full_idx:
+        v = s.loc[d]
+        if pd.notna(v) and v >= threshold:
+            counter = 0
+        elif counter is not None:
+            counter += 1
+        daily_counts[d] = counter
+
+    return [daily_counts.get(d) for d in dates_shown]
+
+
 # ---------------------------------------------------------------- Chart 1
 def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go.Figure:
     x = _x_labels(gps_player)
-    has_data = gps_player["Total Distance"].notna()
+    has_dist = gps_player["Total Distance"].notna()
+    has_mpm = gps_player["Meterage Per Minute"].notna()
     dist = gps_player["Total Distance"].fillna(0).round(0)
     mpm = gps_player["Meterage Per Minute"]  # keep raw NaN - Plotly skips NaN points entirely
     bargap = _bargap_for(len(x))
 
     fig = go.Figure()
     fig.add_bar(
-        x=x, y=dist, marker_color=GREY, text=_bold_labels_masked(dist, has_data, "{:.0f}"),
+        x=x, y=dist, marker_color=GREY, text=_bold_labels_masked(dist, has_dist, "{:.0f}"),
         textposition="outside", textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
         constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Total Distance",
     )
     fig.add_trace(go.Scatter(
         x=x, y=mpm, mode="markers+text", marker=dict(color=GOLD, size=9, symbol="circle"),
-        text=_bold_labels_masked(mpm.fillna(0).round(1), has_data, "{:.1f}"), textposition="top center",
+        text=_bold_labels_masked(mpm.fillna(0).round(1), has_mpm, "{:.1f}"), textposition="top center",
         textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
         name="Metres / Min", yaxis="y2", cliponaxis=False, hoverinfo="skip",
     ))
     fig.update_layout(bargap=bargap)
-    fig = base_layout(fig)
+    fig = base_layout(fig, n_dates=len(x))
 
     max_dist = dist.max() if len(dist) else 0
     max_mpm = mpm.max() if len(mpm) else 0
@@ -112,21 +137,73 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
     return fig
 
 
+# ---------------------------------------------------------------- Chart 1b (Max Speed + Max Speed %)
+def chart_max_speed(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go.Figure:
+    x = _x_labels(gps_player)
+    has_speed = gps_player["Maximum Velocity"].notna()
+    has_pct = gps_player["Max Vel (% Max)"].notna()
+    speed = gps_player["Maximum Velocity"].fillna(0).round(1)
+    pct = gps_player["Max Vel (% Max)"]  # keep raw NaN - Plotly skips NaN points entirely
+    bargap = _bargap_for(len(x))
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=speed, marker_color=GREY, text=_bold_labels_masked(speed, has_speed, "{:.1f}"),
+        textposition="outside", textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
+        constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Max Speed",
+    )
+    fig.add_trace(go.Scatter(
+        x=x, y=pct, mode="markers+text", marker=dict(color=GOLD, size=9, symbol="circle"),
+        text=_bold_labels_masked(pct.fillna(0).round(0), has_pct, "{:.0f}%"), textposition="top center",
+        textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
+        name="Max Speed %", yaxis="y2", cliponaxis=False, hoverinfo="skip",
+    ))
+    fig.update_layout(bargap=bargap)
+    fig = base_layout(fig, n_dates=len(x))
+
+    max_speed = speed.max() if len(speed) else 0
+    max_pct = pct.max() if len(pct) else 0
+    if pd.isna(max_pct):
+        max_pct = 0
+    speed_range, pct_range, box_y = three_band_ranges(max_speed, max_pct)
+    fig.update_layout(
+        yaxis=dict(visible=False, range=speed_range),
+        yaxis2=dict(overlaying="y", side="right", visible=False, range=pct_range),
+    )
+
+    # Box shows days since Max Speed % last hit 90+ (0 on the day it's hit,
+    # counting up on every day since, including rest days, until it's hit
+    # again) - same plain white/navy box style, not colour-coded like ACWR.
+    hist = gps_full_history.copy()
+    streak_vals = _days_since_threshold(hist, "Max Vel (% Max)", 90, gps_player["Date"])
+    for xi, v in zip(x, streak_vals):
+        if v is None:
+            continue
+        fig.add_annotation(
+            x=xi, y=box_y, xref="x", yref="paper", text=bold(str(v)),
+            showarrow=False, font=dict(family=FONT, size=13, color=NAVY),
+            bgcolor=WHITE, bordercolor=NAVY, borderwidth=1.5, borderpad=4,
+            yanchor="middle",
+        )
+    return fig
+
+
 # ---------------------------------------------------------------- Chart 2 (HSR + SD, stacked)
 def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go.Figure:
     x = _x_labels(gps_player)
-    has_data = gps_player["Total Distance"].notna()
+    has_hsr = gps_player["Velocity Band 4 Total Distance"].notna() | gps_player["Velocity Band 5 Total Distance"].notna()
+    has_sd = gps_player["SD"].notna()
     hsr = (gps_player["Velocity Band 4 Total Distance"].fillna(0)
            + gps_player["Velocity Band 5 Total Distance"].fillna(0)).round(0)
     sd = gps_player["SD"].fillna(0).round(0)
     bargap = _bargap_for(len(x))
 
     fig = go.Figure()
-    fig.add_bar(x=x, y=hsr, marker_color=GOLD, text=_bold_labels_masked(hsr, has_data, "{:.0f}"),
+    fig.add_bar(x=x, y=hsr, marker_color=GOLD, text=_bold_labels_masked(hsr, has_hsr, "{:.0f}"),
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="HSR")
-    fig.add_bar(x=x, y=sd, marker_color=RED, text=_bold_labels_masked(sd, has_data, "{:.0f}"),
+    fig.add_bar(x=x, y=sd, marker_color=RED, text=_bold_labels_masked(sd, has_sd, "{:.0f}"),
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="SD")
@@ -138,7 +215,7 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
                       + hist["SD"].fillna(0))
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
 
-    fig = base_layout(fig)
+    fig = base_layout(fig, n_dates=len(x))
     top = (hsr + sd)
     fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
     return fig
@@ -148,20 +225,22 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
 def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
                        accel_col: str, decel_col: str) -> go.Figure:
     x = _x_labels(gps_player)
-    has_data = gps_player["Total Distance"].notna()
+    has_accel = gps_player[accel_col].notna()
+    has_decel = gps_player[decel_col].notna()
     accel = gps_player[accel_col].fillna(0).round(0)
     decel = gps_player[decel_col].fillna(0).round(0)
     bargap = _bargap_for(len(x))
 
     fig = go.Figure()
-    fig.add_bar(x=x, y=accel, marker_color=GREEN, text=_bold_labels_masked(accel, has_data, "{:.0f}"),
+    fig.add_bar(x=x, y=accel, marker_color=GREEN, text=_bold_labels_masked(accel, has_accel, "{:.0f}"),
                 textposition="outside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Accelerations")
-    fig.add_bar(x=x, y=decel, marker_color=RED, text=_bold_labels_masked(decel, has_data, "{:.0f}"),
+    fig.add_bar(x=x, y=decel, marker_color=RED, text=_bold_labels_masked(decel, has_decel, "{:.0f}"),
                 textposition="outside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Decelerations")
+
     # barmode group + bargroupgap=0 -> the two bars in each date-pair sit flush together
     fig.update_layout(barmode="group", bargap=bargap, bargroupgap=0)
 
@@ -169,7 +248,7 @@ def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
     hist["combo"] = hist[accel_col].fillna(0) + hist[decel_col].fillna(0)
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
 
-    fig = base_layout(fig)
+    fig = base_layout(fig, n_dates=len(x))
     top = pd.concat([accel, decel], axis=1).max(axis=1)
     fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
     return fig
@@ -199,18 +278,20 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
     aer2 = to_min("Aerobic zone 2 (hh:mm:ss)")     # 70-79% HR Max
     anth = to_min("Anaerobic threshold zone (hh:mm:ss)")  # 80-89% HR Max
     hi = to_min("High intensity training (hh:mm:ss)")     # 90%+ HR Max
-    has_data = fb_player["Aerobic zone 2 (hh:mm:ss)"].notna()
+    has_aer2 = fb_player["Aerobic zone 2 (hh:mm:ss)"].notna()
+    has_anth = fb_player["Anaerobic threshold zone (hh:mm:ss)"].notna()
+    has_hi = fb_player["High intensity training (hh:mm:ss)"].notna()
 
     fig = go.Figure()
-    fig.add_bar(x=x, y=aer2, marker_color=DARK_GOLD, text=_bold_labels_masked(aer2, has_data, "{:.0f}m"),
+    fig.add_bar(x=x, y=aer2, marker_color=DARK_GOLD, text=_bold_labels_masked(aer2, has_aer2, "{:.0f}m"),
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="70-79% HR Max")
-    fig.add_bar(x=x, y=anth, marker_color=GOLD, text=_bold_labels_masked(anth, has_data, "{:.0f}m"),
+    fig.add_bar(x=x, y=anth, marker_color=GOLD, text=_bold_labels_masked(anth, has_anth, "{:.0f}m"),
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="80-89% HR Max")
-    fig.add_bar(x=x, y=hi, marker_color=RED, text=_bold_labels_masked(hi, has_data, "{:.0f}m"),
+    fig.add_bar(x=x, y=hi, marker_color=RED, text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
                 textposition="inside", insidetextanchor="middle",
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="90%+ HR Max")
@@ -220,13 +301,14 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
     te_max = fb_player[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
     te_vals = [round(v, 1) if pd.notna(v) else None for v in te_max]
 
-    fig = base_layout(fig)
+    fig = base_layout(fig, n_dates=len(x))
     fig = _apply_value_row(fig, x, te_vals, top.max() if len(top) else 0, fmt="{:.1f}", color_fn=te_box_color)
     return fig
 
 
 # ---------------------------------------------------------------- Legend (colour key) definitions
 LEGEND_TOTAL_DISTANCE = [(GREY, "Total Distance"), (GOLD, "Metres per Minute")]
+LEGEND_MAX_SPEED = [(GREY, "Max Speed"), (GOLD, "Max Speed %")]
 LEGEND_HSR_SD = [(GOLD, "HSR"), (RED, "Sprint Distance")]
 LEGEND_HR_ZONES = [(DARK_GOLD, "70-79% HR Max"), (GOLD, "80-89% HR Max"), (RED, "90%+ HR Max")]
 

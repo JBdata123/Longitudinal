@@ -51,6 +51,17 @@ st.markdown(f"""
         color: {WHITE} !important;
     }}
     .st-key-header_bar div[data-baseweb="select"] svg {{ fill: {WHITE} !important; }}
+    /* the selected-value text sits in its own inner element that likely has
+       its own background separate from the outer navy control - force that
+       inner background transparent (so the navy shows through) and keep
+       the text white, rather than guessing at a text colour against an
+       unknown background */
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] div,
+    .st-key-header_bar div[data-testid="stSelectbox"] div[data-baseweb="select"] span {{
+        color: {WHITE} !important;
+        background-color: transparent !important;
+        -webkit-text-fill-color: {WHITE} !important;
+    }}
 
     /* the dropdown popover/menu that appears when you click the selectbox */
     div[data-baseweb="popover"] ul[role="listbox"] {{
@@ -139,7 +150,7 @@ if not st.session_state.authenticated:
                 st.error("Incorrect password.")
     st.stop()
 
-# ---------------------------------------------------------------- auto refresh every 30s
+# ---------------------------------------------------------------- auto refresh every 60s
 st_autorefresh(interval=CACHE_TTL_SECONDS * 1000, key="auto_refresh")
 
 if "cache_buster" not in st.session_state:
@@ -256,11 +267,19 @@ render_panel(
     box_note="ACWR",
 )
 
+render_panel(
+    "Max Speed | Max Speed %",
+    charts.chart_max_speed(gps_player_display, gps_player_full),
+    key="chart_max_speed",
+    legend_items=charts.LEGEND_MAX_SPEED,
+    box_note="Days Since 90%+",
+)
+
 if fb_player_range.empty:
     st.info("No heart rate (Firstbeat) data found for this player in the selected date range.")
 else:
     render_panel(
-        "70-79% HR Max | 80-89% HR Max | 90%+ HR Max",
+        "Heart Rate Zone Minutes",
         charts.chart_hr_zones(fb_player_display),
         key="chart_hr_zones",
         legend_items=charts.LEGEND_HR_ZONES,

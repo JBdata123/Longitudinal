@@ -23,16 +23,24 @@ ACWR_CHRONIC_SPAN = 28
 
 
 def day_axis_label(date, day_type):
-    """'13/01 - Reactivation' style x-axis label. If there's no day type
-    (a rest day with no session at all), just show the date on its own."""
+    """Two-line, centred x-axis label: date on top, day type underneath
+    (Plotly renders '<br>' as a real line break in tick labels, and
+    category-axis ticks are centre-anchored by default). Rest days with no
+    day type just show the bare date on its own."""
+    date_str = date.strftime('%d/%m')
     if day_type is None or (isinstance(day_type, float) and pd.isna(day_type)) or day_type == "":
-        return date.strftime('%d/%m')
-    return f"{date.strftime('%d/%m')} - {day_type}"
+        return date_str
+    return f"{date_str}<br>{day_type}"
 
 
-def base_layout(fig, height=340):
+def base_layout(fig, height=340, n_dates=None):
     """Apply the shared LCFC look to a plotly figure: navy panel, white text,
-    no gridlines, Arial font, bigger white x-axis labels."""
+    no gridlines, Arial font, white x-axis labels sized to fit - smaller as
+    more dates are on screen so long date ranges don't get jumbled."""
+    if n_dates:
+        tick_size = max(7, min(11, 11 - (n_dates - 8) * 0.2))
+    else:
+        tick_size = 10
     fig.update_layout(
         plot_bgcolor=NAVY,
         paper_bgcolor=NAVY,
@@ -40,7 +48,7 @@ def base_layout(fig, height=340):
         margin=dict(l=30, r=30, t=50, b=42),
         height=height,
         showlegend=False,
-        xaxis=dict(showgrid=False, color=WHITE, tickfont=dict(size=15, color=WHITE), tickangle=0),
+        xaxis=dict(showgrid=False, color=WHITE, tickfont=dict(size=tick_size, color=WHITE), tickangle=0),
         yaxis=dict(showgrid=False, color=WHITE, zeroline=False, visible=False),
         hovermode=False,
     )
