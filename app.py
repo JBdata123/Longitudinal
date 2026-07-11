@@ -245,3 +245,50 @@ render_panel(
 )
 
 render_panel(
+    "HSR (Velocity Band 4 + 5) | Sprint Distance",
+    charts.chart_hsr_sd(gps_player_display, gps_player_full),
+    key="chart_hsr_sd",
+    legend_items=charts.LEGEND_HSR_SD,
+    box_note="ACWR",
+)
+
+render_panel(
+    "Accelerations (1-3) | Decelerations (1-3)",
+    charts.chart_accel_decel(
+        gps_player_display, gps_player_full,
+        "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+    ),
+    key="chart_accel_decel_13",
+    legend_items=charts.legend_accel_decel("1-3"),
+    box_note="ACWR",
+)
+
+render_panel(
+    "Accelerations (2-3) | Decelerations (2-3)",
+    charts.chart_accel_decel(
+        gps_player_display, gps_player_full,
+        "Acceleration B2-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
+    ),
+    key="chart_accel_decel_23",
+    legend_items=charts.legend_accel_decel("2-3"),
+    box_note="ACWR",
+)
+
+render_panel(
+    "Max Speed | Max Speed %",
+    charts.chart_max_speed(gps_player_display, gps_player_full),
+    key="chart_max_speed",
+    legend_items=charts.LEGEND_MAX_SPEED,
+    box_note="Days Since 90%+",
+)
+
+if fb_player_range.empty:
+    st.info("No heart rate (Firstbeat) data found for this player in the selected date range.")
+else:
+    render_panel(
+        "Heart Rate Zone Minutes",
+        charts.chart_hr_zones(fb_player_display),
+        key="chart_hr_zones",
+        legend_items=charts.LEGEND_HR_ZONES,
+        box_note="Training Effect",
+    )
