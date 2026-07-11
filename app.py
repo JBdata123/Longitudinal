@@ -183,36 +183,6 @@ with st.container(key="header_bar", border=True):
         )
     with refresh_col:
         with st.container(key="refresh_box", border=True):
-            st.markdown(
-                """
-                <button onclick="
-                    (function() {
-                        function exportAll(doc) {
-                            var found = 0;
-                            doc.querySelectorAll('.js-plotly-plot').forEach(function(gd, i) {
-                                if (window.Plotly || (gd.ownerDocument.defaultView && gd.ownerDocument.defaultView.Plotly)) {
-                                    var PlotlyRef = (gd.ownerDocument.defaultView && gd.ownerDocument.defaultView.Plotly) || window.Plotly;
-                                    PlotlyRef.downloadImage(gd, {format: 'png', filename: 'chart_' + (i + 1)});
-                                    found++;
-                                }
-                            });
-                            return found;
-                        }
-                        var total = exportAll(document);
-                        document.querySelectorAll('iframe').forEach(function(f) {
-                            try { total += exportAll(f.contentDocument); } catch (e) {}
-                        });
-                        if (total === 0) alert('No charts found to export - try again once the page has fully loaded.');
-                    })();
-                " style="
-                    width:100%; padding:0.4rem 0.6rem; margin-bottom:6px;
-                    background-color:#003090; color:#FFFFFF; border:1px solid #FFFFFF;
-                    border-radius:6px; font-family:'Segoe UI',Arial,sans-serif;
-                    font-size:14px; cursor:pointer;
-                ">📷 Export charts as PNG</button>
-                """,
-                unsafe_allow_html=True,
-            )
             if st.button("🔄 Refresh data now"):
                 st.session_state.cache_buster += 1
                 load_data.clear()
@@ -255,7 +225,17 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
     st.markdown(metric_title_bar(title), unsafe_allow_html=True)
     if legend_items:
         st.markdown(legend_row(legend_items, box_note=box_note), unsafe_allow_html=True)
-    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False}, key=key)
+    plot_config = {
+        "displayModeBar": True,
+        "displaylogo": False,
+        "modeBarButtonsToRemove": [
+            "zoom2d", "pan2d", "select2d", "lasso2d", "zoomIn2d", "zoomOut2d",
+            "autoScale2d", "resetScale2d", "hoverClosestCartesian",
+            "hoverCompareCartesian", "toggleSpikelines",
+        ],
+        "toImageButtonOptions": {"format": "png", "filename": key, "scale": 2},
+    }
+    st.plotly_chart(fig, width="stretch", config=plot_config, key=key)
 
 render_panel(
     "Total Distance | Metres per Minute",
