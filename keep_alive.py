@@ -13,7 +13,7 @@ import sys
 from playwright.async_api import async_playwright
 
 # Set this to your real deployed app URL (or override via env var STREAMLIT_URL)
-STREAMLIT_URL = os.environ.get("STREAMLIT_URL", "https://mdjdfnfovkdojedd.streamlit.app/")
+STREAMLIT_URL = os.environ.get("STREAMLIT_URL", "https://mdjdfnfovkdojedd.streamlit.app")
 
 
 async def visit(url: str) -> str:
