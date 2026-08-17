@@ -26,8 +26,6 @@ st.markdown(f"""
         padding: 10px 24px 20px 24px !important;
         box-shadow: none !important;
     }}
-    /* vertically align the dropdown / slider / refresh button on one row,
-       regardless of each widget's own natural height */
     .st-key-header_bar div[data-testid="stHorizontalBlock"] {{
         align-items: center !important;
     }}
@@ -38,16 +36,12 @@ st.markdown(f"""
         color: {WHITE} !important;
         font-family: {FONT};
     }}
-    /* centre every widget label in the header (e.g. "Date range") */
     .st-key-header_bar [data-testid="stWidgetLabel"] {{
         display: flex;
         justify-content: center;
         width: 100%;
     }}
 
-    /* Blue background, white text, everywhere inside the selectbox -
-       maximum specificity via repeated class chaining, pure universal
-       selector, no exceptions of any kind. */
     .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] * {{
         background-color: {NAVY} !important;
         color: {WHITE} !important;
@@ -55,13 +49,10 @@ st.markdown(f"""
         border-color: {WHITE} !important;
         fill: {WHITE} !important;
     }}
-    /* just hide the dropdown arrow icon entirely - simpler and far more
-       reliable than fighting its colour */
     .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] svg {{
         display: none !important;
     }}
 
-    /* the dropdown popover/menu that appears when you click the selectbox */
     div[data-baseweb="popover"] ul[role="listbox"] {{
         background-color: {NAVY} !important;
     }}
@@ -74,13 +65,11 @@ st.markdown(f"""
         color: {NAVY} !important;
     }}
 
-    /* slider track/handles */
     .st-key-header_bar div[data-baseweb="slider"] div[role="slider"] {{
         background-color: {GOLD} !important;
     }}
     .st-key-header_bar div[data-testid="stTickBar"] {{ color: {WHITE} !important; }}
 
-    /* refresh button - permanently navy in every state */
     .st-key-header_bar .stButton > button {{
         background-color: {NAVY} !important;
         color: {WHITE} !important;
@@ -96,15 +85,10 @@ st.markdown(f"""
         box-shadow: none !important;
     }}
 
-    /* right-align the refresh column's content block within its column */
     .st-key-header_bar div[data-testid="stHorizontalBlock"] > div:last-child {{
         display: flex !important;
         justify-content: flex-end !important;
     }}
-    /* refresh_box: strip its visible border (only needed so Streamlit
-       reliably attaches the st-key class to a real wrapper div), then
-       shrink-wrap it and push it to the right edge, centring the button
-       and caption relative to each other inside it */
     .st-key-refresh_box {{
         border: none !important;
         box-shadow: none !important;
@@ -124,29 +108,6 @@ st.markdown(f"""
     h1, h2, h3 {{ text-align: center; }}
 </style>
 """, unsafe_allow_html=True)
-
-# ---------------------------------------------------------------- password gate
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    st.markdown(
-        "<div style='text-align:center; margin-top:80px;'>"
-        "<h2>LCWFC Longitudinal Report</h2>"
-        "<p>Enter the password to continue.</p></div>",
-        unsafe_allow_html=True,
-    )
-    _, mid_col, _ = st.columns([1, 1.2, 1])
-    with mid_col:
-        entered = st.text_input("Password", type="password", label_visibility="collapsed",
-                                 placeholder="Password")
-        if st.button("Enter", width="stretch"):
-            if entered == st.secrets.get("app_password", ""):
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Incorrect password.")
-    st.stop()
 
 # ---------------------------------------------------------------- auto refresh every 60s
 st_autorefresh(interval=CACHE_TTL_SECONDS * 1000, key="auto_refresh")
