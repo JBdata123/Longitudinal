@@ -1,5 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
+
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -16,7 +17,6 @@ st.markdown(f"""
     .stApp {{ background-color: {WHITE}; }}
     #MainMenu, footer {{visibility: hidden;}}
     div.block-container {{ padding-top: 0rem; }}
-
     /* ---- header bar (navy, gold underline) ---- */
     .st-key-header_bar {{
         background-color: {NAVY} !important;
@@ -41,7 +41,6 @@ st.markdown(f"""
         justify-content: center;
         width: 100%;
     }}
-
     .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] * {{
         background-color: {NAVY} !important;
         color: {WHITE} !important;
@@ -52,7 +51,6 @@ st.markdown(f"""
     .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] svg {{
         display: none !important;
     }}
-
     div[data-baseweb="popover"] ul[role="listbox"] {{
         background-color: {NAVY} !important;
     }}
@@ -64,12 +62,10 @@ st.markdown(f"""
         background-color: {GOLD} !important;
         color: {NAVY} !important;
     }}
-
     .st-key-header_bar div[data-baseweb="slider"] div[role="slider"] {{
         background-color: {GOLD} !important;
     }}
     .st-key-header_bar div[data-testid="stTickBar"] {{ color: {WHITE} !important; }}
-
     .st-key-header_bar .stButton > button {{
         background-color: {NAVY} !important;
         color: {WHITE} !important;
@@ -84,7 +80,6 @@ st.markdown(f"""
         border: 1px solid {WHITE} !important;
         box-shadow: none !important;
     }}
-
     .st-key-header_bar div[data-testid="stHorizontalBlock"] > div:last-child {{
         display: flex !important;
         justify-content: flex-end !important;
@@ -104,7 +99,6 @@ st.markdown(f"""
     .st-key-refresh_box .stButton {{
         width: fit-content !important;
     }}
-
     h1, h2, h3 {{ text-align: center; }}
 </style>
 """, unsafe_allow_html=True)
@@ -181,7 +175,8 @@ fb_player_display = (
     .merge(gps_player_display[["Date", "Day"]], on="Date", how="left")
 )
 
-# ---------------------------------------------------------------- charts
+
+# ---------------------------------------------------------------- shared panel renderer
 def render_panel(title, fig, key, legend_items=None, box_note=None):
     st.markdown(metric_title_bar(title), unsafe_allow_html=True)
     if legend_items:
@@ -198,6 +193,57 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
     }
     st.plotly_chart(fig, width="stretch", config=plot_config, key=key, theme=None)
 
+
+# ---------------------------------------------------------------- weekly summary boxes
+OLIVIA_WEEKLY_AVERAGES = {
+    "total_distance": 24113,
+    "hsr_sd": 535,
+    "accel": 193,
+    "decel": 152,
+}
+is_olivia = player.strip().lower() == "olivia mcloughlin"
+avg_total_distance = OLIVIA_WEEKLY_AVERAGES["total_distance"] if is_olivia else None
+avg_hsr_sd = OLIVIA_WEEKLY_AVERAGES["hsr_sd"] if is_olivia else None
+avg_accel = OLIVIA_WEEKLY_AVERAGES["accel"] if is_olivia else None
+avg_decel = OLIVIA_WEEKLY_AVERAGES["decel"] if is_olivia else None
+
+wk1, wk2, wk3, wk4 = st.columns(4)
+with wk1:
+    render_panel(
+        "Weekly Total Distance",
+        charts.chart_weekly_single(
+            gps_player_full, "Total Distance", avg_total_distance, charts.GOLD,
+        ),
+        key="chart_weekly_total_distance",
+        legend_items=charts.LEGEND_WEEKLY_TOTAL_DISTANCE,
+    )
+with wk2:
+    render_panel(
+        "Weekly HSR + SD",
+        charts.chart_weekly_hsr_sd(gps_player_full, avg_hsr_sd),
+        key="chart_weekly_hsr_sd",
+        legend_items=charts.LEGEND_WEEKLY_HSR_SD,
+    )
+with wk3:
+    render_panel(
+        "Weekly Accelerations",
+        charts.chart_weekly_single(
+            gps_player_full, "Acceleration B1-3 Total Efforts (Gen 2)", avg_accel, charts.GREEN,
+        ),
+        key="chart_weekly_accel",
+        legend_items=charts.LEGEND_WEEKLY_ACCEL,
+    )
+with wk4:
+    render_panel(
+        "Weekly Decelerations",
+        charts.chart_weekly_single(
+            gps_player_full, "Deceleration B1-3 Total Efforts (Gen 2)", avg_decel, charts.RED,
+        ),
+        key="chart_weekly_decel",
+        legend_items=charts.LEGEND_WEEKLY_DECEL,
+    )
+
+# ---------------------------------------------------------------- daily charts
 render_panel(
     "Total Distance | Metres per Minute",
     charts.chart_total_distance(gps_player_display, gps_player_full),
@@ -205,7 +251,6 @@ render_panel(
     legend_items=charts.LEGEND_TOTAL_DISTANCE,
     box_note="ACWR",
 )
-
 render_panel(
     "HSR (Velocity Band 4 + 5) | Sprint Distance",
     charts.chart_hsr_sd(gps_player_display, gps_player_full),
@@ -213,7 +258,6 @@ render_panel(
     legend_items=charts.LEGEND_HSR_SD,
     box_note="ACWR",
 )
-
 render_panel(
     "Accelerations (1-3) | Decelerations (1-3)",
     charts.chart_accel_decel(
@@ -224,7 +268,6 @@ render_panel(
     legend_items=charts.legend_accel_decel("1-3"),
     box_note="ACWR",
 )
-
 render_panel(
     "Accelerations (2-3) | Decelerations (2-3)",
     charts.chart_accel_decel(
@@ -235,7 +278,6 @@ render_panel(
     legend_items=charts.legend_accel_decel("2-3"),
     box_note="ACWR",
 )
-
 render_panel(
     "Max Speed | Max Speed %",
     charts.chart_max_speed(gps_player_display, gps_player_full),
@@ -243,7 +285,6 @@ render_panel(
     legend_items=charts.LEGEND_MAX_SPEED,
     box_note="Days Since 90%+",
 )
-
 if fb_player_range.empty:
     st.info("No heart rate (Firstbeat) data found for this player in the selected date range.")
 else:
