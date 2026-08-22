@@ -294,3 +294,100 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
     fig = base_layout(fig, n_dates=len(x))
     top = (hsr + sd)
+    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
+    return fig
+
+
+# ---------------------------------------------------------------- Chart 3 / 4 (Accel / Decel, clustered)
+def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
+                       accel_col: str, decel_col: str) -> go.Figure:
+    x = _x_labels(gps_player)
+    has_accel = gps_player[accel_col].notna()
+    has_decel = gps_player[decel_col].notna()
+    accel = gps_player[accel_col].fillna(0).round(0)
+    decel = gps_player[decel_col].fillna(0).round(0)
+    bargap = _bargap_for(len(x))
+    fig = go.Figure()
+    fig.add_bar(x=x, y=accel, marker_color=GREEN, text=_bold_labels_masked(accel, has_accel, "{:.0f}"),
+                textposition="outside", insidetextanchor="middle",
+                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+                constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Accelerations")
+    fig.add_bar(x=x, y=decel, marker_color=RED, text=_bold_labels_masked(decel, has_decel, "{:.0f}"),
+                textposition="outside", insidetextanchor="middle",
+                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+                constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Decelerations")
+    fig.update_layout(barmode="group", bargap=bargap, bargroupgap=0)
+    hist = gps_full_history.copy()
+    hist["combo"] = hist[accel_col].fillna(0) + hist[decel_col].fillna(0)
+    acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
+    fig = base_layout(fig, n_dates=len(x))
+    top = pd.concat([accel, decel], axis=1).max(axis=1)
+    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
+    return fig
+
+
+# ---------------------------------------------------------------- Chart 5 (HR zones, stacked)
+def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
+    x = _x_labels(fb_player)
+    bargap = _bargap_for(len(x))
+
+    def _to_minutes(t):
+        if pd.isna(t):
+            return 0
+        if isinstance(t, pd.Timedelta):
+            return t.total_seconds() / 60
+        if hasattr(t, "hour"):
+            return t.hour * 60 + t.minute + t.second / 60
+        s = str(t).strip()
+        if "days" in s:  # pandas Timedelta prints as "0 days 00:12:34"
+            s = s.split()[-1]
+        h, m, sec = [float(p) for p in s.split(":")]
+        return h * 60 + m + sec / 60
+
+    def to_min(col):
+        return fb_player[col].apply(_to_minutes).round(1)
+
+    aer2 = to_min("Aerobic zone 2 (hh:mm:ss)")     # 70-79% HR Max
+    anth = to_min("Anaerobic threshold zone (hh:mm:ss)")  # 80-89% HR Max
+    hi = to_min("High intensity training (hh:mm:ss)")     # 90%+ HR Max
+    has_aer2 = fb_player["Aerobic zone 2 (hh:mm:ss)"].notna()
+    has_anth = fb_player["Anaerobic threshold zone (hh:mm:ss)"].notna()
+    has_hi = fb_player["High intensity training (hh:mm:ss)"].notna()
+    fig = go.Figure()
+    fig.add_bar(x=x, y=aer2, marker_color=DARK_GOLD, text=_bold_labels_masked(aer2, has_aer2, "{:.0f}m"),
+                textposition="inside", insidetextanchor="middle",
+                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+                constraintext="none", textangle=0, hoverinfo="skip", name="70-79% HR Max")
+    fig.add_bar(x=x, y=anth, marker_color=GOLD, text=_bold_labels_masked(anth, has_anth, "{:.0f}m"),
+                textposition="inside", insidetextanchor="middle",
+                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+                constraintext="none", textangle=0, hoverinfo="skip", name="80-89% HR Max")
+    fig.add_bar(x=x, y=hi, marker_color=RED, text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
+                textposition="inside", insidetextanchor="middle",
+                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+                constraintext="none", textangle=0, hoverinfo="skip", name="90%+ HR Max")
+    fig.update_layout(barmode="stack", bargap=bargap)
+    top = aer2 + anth + hi
+    te_max = fb_player[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
+    te_vals = [round(v, 1) if pd.notna(v) else None for v in te_max]
+    fig = base_layout(fig, n_dates=len(x))
+    fig = _apply_value_row(fig, x, te_vals, top.max() if len(top) else 0, fmt="{:.1f}", color_fn=te_box_color)
+    return fig
+
+
+# ---------------------------------------------------------------- Legend (colour key) definitions
+LEGEND_TOTAL_DISTANCE = [(GREY, "Total Distance"), (GOLD, "Metres per Minute")]
+LEGEND_MAX_SPEED = [(GREY, "Max Speed"), (GOLD, "Max Speed %")]
+LEGEND_HSR_SD = [(GOLD, "HSR"), (RED, "Sprint Distance")]
+LEGEND_HR_ZONES = [(DARK_GOLD, "70-79% HR Max"), (GOLD, "80-89% HR Max"), (RED, "90%+ HR Max")]
+
+
+def legend_accel_decel(label_suffix):
+    return [(GREEN, f"Accelerations ({label_suffix})"), (RED, f"Decelerations ({label_suffix})")]
+
+
+# ---------------------------------------------------------------- Weekly legends
+LEGEND_WEEKLY_TOTAL_DISTANCE = [(GREY, "Average"), (GOLD, "Weekly Total Distance")]
+LEGEND_WEEKLY_HSR_SD = [(GREY, "Average"), (GOLD, "HSR"), (RED, "Sprint Distance")]
+LEGEND_WEEKLY_ACCEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations")]
+LEGEND_WEEKLY_DECEL = [(GREY, "Average"), (RED, "Weekly Decelerations")]
