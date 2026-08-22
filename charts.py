@@ -1,5 +1,5 @@
 """
-Builds the 5 plotly figures for the Longitudinal Report page, in the
+Builds the plotly figures for the Longitudinal Report page, in the
 style of the LCFC mock-up: centred white metric-name title bar + navy chart
 panel, bold white values printed directly on/inside the bars, a dedicated
 row of small white ACWR/TE boxes floating above the bars, LCFC brand
@@ -71,7 +71,6 @@ def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float
     s = full_history.set_index("Date")[col].sort_index()
     full_idx = pd.date_range(s.index.min(), s.index.max(), freq="D")
     s = s.reindex(full_idx)  # NaN on rest/no-session days
-
     counter = None
     daily_counts = {}
     for d in full_idx:
@@ -81,8 +80,101 @@ def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float
         elif counter is not None:
             counter += 1
         daily_counts[d] = counter
-
     return [daily_counts.get(d) for d in dates_shown]
+
+
+# ---------------------------------------------------------------- Weekly summary helpers
+def _weekly_grouped(gps_full_history: pd.DataFrame, week_col="Week Number", **agg_cols):
+    """Groups full history by Week Number, sums the requested value column(s),
+    and orders weeks chronologically by each week's earliest date (not by the
+    raw week number, since preseason numbering counts down as time moves
+    forward: -1, -2, -3...)."""
+    hist = gps_full_history.dropna(subset=[week_col]).copy()
+    agg = {name: (col, "sum") for name, col in agg_cols.items()}
+    agg["first_date"] = ("Date", "min")
+    grouped = hist.groupby(week_col).agg(**agg).reset_index()
+    return grouped.sort_values("first_date")
+
+
+def _weekly_labels(grouped, week_col="Week Number"):
+    return [f"Week {int(w)}" for w in grouped[week_col]]
+
+
+def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_value, bar_color: str,
+                         week_col="Week Number", fmt="{:.0f}") -> go.Figure:
+    """Weekly summary bar: [Average (grey)] | divider | [Week -1] [Week -2] ...
+    If avg_value is None, the average is computed live as the mean of this
+    player's own weekly totals so far, rather than a fixed hardcoded value."""
+    grouped = _weekly_grouped(gps_full_history, week_col, total=value_col)
+    week_labels = _weekly_labels(grouped, week_col)
+    week_values = grouped["total"].round(0)
+    if avg_value is None:
+        avg_value = week_values.mean() if len(week_values) else 0
+    x = ["Average"] + week_labels
+    y = [avg_value] + list(week_values)
+    colors = [GREY] + [bar_color] * len(week_labels)
+    text = [bold(fmt.format(v)) for v in y]
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=y, marker_color=colors, text=text, textposition="outside",
+        textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
+        constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip",
+    )
+    fig.update_layout(bargap=_bargap_for(len(x)))
+    fig = base_layout(fig, n_dates=len(x))
+    max_y = max(y) if y else 1
+    fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
+    fig.add_shape(
+        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
+        line=dict(color=WHITE, width=1.5, dash="dot"),
+    )
+    return fig
+
+
+def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number") -> go.Figure:
+    """Weekly HSR+SD stacked summary: [Average (grey, single block)] | divider |
+    [Week -1 (gold HSR + red SD stacked)] [Week -2] ...
+    If avg_value is None, the average is computed live as the mean of this
+    player's own weekly (HSR+SD) totals so far, rather than a fixed value."""
+    hist = gps_full_history.dropna(subset=[week_col]).copy()
+    hist["_hsr"] = hist["Velocity Band 4 Total Distance"].fillna(0) + hist["Velocity Band 5 Total Distance"].fillna(0)
+    hist["_sd"] = hist["SD"].fillna(0)
+    grouped = _weekly_grouped(hist, week_col, hsr="_hsr", sd="_sd")
+    week_labels = _weekly_labels(grouped, week_col)
+    hsr_week = grouped["hsr"].round(0)
+    sd_week = grouped["sd"].round(0)
+    if avg_value is None:
+        combo_week = hsr_week + sd_week
+        avg_value = combo_week.mean() if len(combo_week) else 0
+    x = ["Average"] + week_labels
+    hsr_y = [avg_value] + list(hsr_week)
+    sd_y = [0] + list(sd_week)
+    hsr_colors = [GREY] + [GOLD] * len(week_labels)
+    sd_colors = [GREY] + [RED] * len(week_labels)
+    hsr_text = [bold(f"{avg_value:.0f}")] + [bold(f"{v:.0f}") for v in hsr_week]
+    sd_text = [""] + [bold(f"{v:.0f}") for v in sd_week]
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=hsr_y, marker_color=hsr_colors, text=hsr_text,
+        textposition="inside", insidetextanchor="middle",
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none", textangle=0, hoverinfo="skip", name="HSR",
+    )
+    fig.add_bar(
+        x=x, y=sd_y, marker_color=sd_colors, text=sd_text,
+        textposition="inside", insidetextanchor="middle",
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none", textangle=0, hoverinfo="skip", name="SD",
+    )
+    fig.update_layout(barmode="stack", bargap=_bargap_for(len(x)))
+    fig = base_layout(fig, n_dates=len(x))
+    max_y = max(hsr_y[0], max((h + s for h, s in zip(hsr_y[1:], sd_y[1:])), default=0))
+    fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
+    fig.add_shape(
+        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
+        line=dict(color=WHITE, width=1.5, dash="dot"),
+    )
+    return fig
 
 
 # ---------------------------------------------------------------- Chart 1
@@ -93,7 +185,6 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
     dist = gps_player["Total Distance"].fillna(0).round(0)
     mpm = gps_player["Meterage Per Minute"]  # keep raw NaN - Plotly skips NaN points entirely
     bargap = _bargap_for(len(x))
-
     fig = go.Figure()
     fig.add_bar(
         x=x, y=dist, marker_color=GREY, text=_bold_labels_masked(dist, has_dist, "{:.0f}"),
@@ -108,7 +199,6 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
     ))
     fig.update_layout(bargap=bargap)
     fig = base_layout(fig, n_dates=len(x))
-
     max_dist = dist.max() if len(dist) else 0
     max_mpm = mpm.max() if len(mpm) else 0
     if pd.isna(max_mpm):
@@ -118,10 +208,6 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
         yaxis=dict(visible=False, range=dist_range),
         yaxis2=dict(overlaying="y", side="right", visible=False, range=mpm_range),
     )
-
-    # ACWR row for Total Distance, same box formatting as the other charts,
-    # sitting in its own strip at a fixed height (paper-relative) above both
-    # the bars and the metres/min dots.
     hist = gps_full_history.copy()
     acwr_vals = _acwr_for_dates(hist, "Total Distance", gps_player["Date"])
     for xi, v in zip(x, acwr_vals):
@@ -145,7 +231,6 @@ def chart_max_speed(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) ->
     speed = gps_player["Maximum Velocity"].fillna(0).round(1)
     pct = gps_player["Max Vel (% Max)"]  # keep raw NaN - Plotly skips NaN points entirely
     bargap = _bargap_for(len(x))
-
     fig = go.Figure()
     fig.add_bar(
         x=x, y=speed, marker_color=GREY, text=_bold_labels_masked(speed, has_speed, "{:.1f}"),
@@ -160,7 +245,6 @@ def chart_max_speed(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) ->
     ))
     fig.update_layout(bargap=bargap)
     fig = base_layout(fig, n_dates=len(x))
-
     max_speed = speed.max() if len(speed) else 0
     max_pct = pct.max() if len(pct) else 0
     if pd.isna(max_pct):
@@ -170,10 +254,6 @@ def chart_max_speed(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) ->
         yaxis=dict(visible=False, range=speed_range),
         yaxis2=dict(overlaying="y", side="right", visible=False, range=pct_range),
     )
-
-    # Box shows days since Max Speed % last hit 90+ (0 on the day it's hit,
-    # counting up on every day since, including rest days, until it's hit
-    # again) - same plain white/navy box style, not colour-coded like ACWR.
     hist = gps_full_history.copy()
     streak_vals = _days_since_threshold(hist, "Max Vel (% Max)", 90, gps_player["Date"])
     for xi, v in zip(x, streak_vals):
@@ -197,7 +277,6 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
            + gps_player["Velocity Band 5 Total Distance"].fillna(0)).round(0)
     sd = gps_player["SD"].fillna(0).round(0)
     bargap = _bargap_for(len(x))
-
     fig = go.Figure()
     fig.add_bar(x=x, y=hsr, marker_color=GOLD, text=_bold_labels_masked(hsr, has_hsr, "{:.0f}"),
                 textposition="inside", insidetextanchor="middle",
@@ -208,110 +287,10 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
                 textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
                 constraintext="none", textangle=0, hoverinfo="skip", name="SD")
     fig.update_layout(barmode="stack", bargap=bargap)
-
     hist = gps_full_history.copy()
     hist["combo"] = (hist["Velocity Band 4 Total Distance"].fillna(0)
                       + hist["Velocity Band 5 Total Distance"].fillna(0)
                       + hist["SD"].fillna(0))
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
-
     fig = base_layout(fig, n_dates=len(x))
     top = (hsr + sd)
-    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
-    return fig
-
-
-# ---------------------------------------------------------------- Chart 3 / 4 (Accel / Decel, clustered)
-def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
-                       accel_col: str, decel_col: str) -> go.Figure:
-    x = _x_labels(gps_player)
-    has_accel = gps_player[accel_col].notna()
-    has_decel = gps_player[decel_col].notna()
-    accel = gps_player[accel_col].fillna(0).round(0)
-    decel = gps_player[decel_col].fillna(0).round(0)
-    bargap = _bargap_for(len(x))
-
-    fig = go.Figure()
-    fig.add_bar(x=x, y=accel, marker_color=GREEN, text=_bold_labels_masked(accel, has_accel, "{:.0f}"),
-                textposition="outside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Accelerations")
-    fig.add_bar(x=x, y=decel, marker_color=RED, text=_bold_labels_masked(decel, has_decel, "{:.0f}"),
-                textposition="outside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip", name="Decelerations")
-
-    # barmode group + bargroupgap=0 -> the two bars in each date-pair sit flush together
-    fig.update_layout(barmode="group", bargap=bargap, bargroupgap=0)
-
-    hist = gps_full_history.copy()
-    hist["combo"] = hist[accel_col].fillna(0) + hist[decel_col].fillna(0)
-    acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
-
-    fig = base_layout(fig, n_dates=len(x))
-    top = pd.concat([accel, decel], axis=1).max(axis=1)
-    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
-    return fig
-
-
-# ---------------------------------------------------------------- Chart 5 (HR zones, stacked)
-def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
-    x = _x_labels(fb_player)
-    bargap = _bargap_for(len(x))
-
-    def _to_minutes(t):
-        if pd.isna(t):
-            return 0
-        if isinstance(t, pd.Timedelta):
-            return t.total_seconds() / 60
-        if hasattr(t, "hour"):
-            return t.hour * 60 + t.minute + t.second / 60
-        s = str(t).strip()
-        if "days" in s:  # pandas Timedelta prints as "0 days 00:12:34"
-            s = s.split()[-1]
-        h, m, sec = [float(p) for p in s.split(":")]
-        return h * 60 + m + sec / 60
-
-    def to_min(col):
-        return fb_player[col].apply(_to_minutes).round(1)
-
-    aer2 = to_min("Aerobic zone 2 (hh:mm:ss)")     # 70-79% HR Max
-    anth = to_min("Anaerobic threshold zone (hh:mm:ss)")  # 80-89% HR Max
-    hi = to_min("High intensity training (hh:mm:ss)")     # 90%+ HR Max
-    has_aer2 = fb_player["Aerobic zone 2 (hh:mm:ss)"].notna()
-    has_anth = fb_player["Anaerobic threshold zone (hh:mm:ss)"].notna()
-    has_hi = fb_player["High intensity training (hh:mm:ss)"].notna()
-
-    fig = go.Figure()
-    fig.add_bar(x=x, y=aer2, marker_color=DARK_GOLD, text=_bold_labels_masked(aer2, has_aer2, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="70-79% HR Max")
-    fig.add_bar(x=x, y=anth, marker_color=GOLD, text=_bold_labels_masked(anth, has_anth, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="80-89% HR Max")
-    fig.add_bar(x=x, y=hi, marker_color=RED, text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="90%+ HR Max")
-    fig.update_layout(barmode="stack", bargap=bargap)
-
-    top = aer2 + anth + hi
-    te_max = fb_player[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
-    te_vals = [round(v, 1) if pd.notna(v) else None for v in te_max]
-
-    fig = base_layout(fig, n_dates=len(x))
-    fig = _apply_value_row(fig, x, te_vals, top.max() if len(top) else 0, fmt="{:.1f}", color_fn=te_box_color)
-    return fig
-
-
-# ---------------------------------------------------------------- Legend (colour key) definitions
-LEGEND_TOTAL_DISTANCE = [(GREY, "Total Distance"), (GOLD, "Metres per Minute")]
-LEGEND_MAX_SPEED = [(GREY, "Max Speed"), (GOLD, "Max Speed %")]
-LEGEND_HSR_SD = [(GOLD, "HSR"), (RED, "Sprint Distance")]
-LEGEND_HR_ZONES = [(DARK_GOLD, "70-79% HR Max"), (GOLD, "80-89% HR Max"), (RED, "90%+ HR Max")]
-
-
-def legend_accel_decel(label_suffix):
-    return [(GREEN, f"Accelerations ({label_suffix})"), (RED, f"Decelerations ({label_suffix})")]
