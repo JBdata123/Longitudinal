@@ -196,10 +196,10 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
 
 # ---------------------------------------------------------------- weekly summary boxes
 OLIVIA_WEEKLY_AVERAGES = {
-    "total_distance": 24113,
-    "hsr_sd": 535,
-    "accel": 193,
-    "decel": 152,
+    "total_distance": 30096,
+    "hsr_sd": 712,
+    "accel": 230,
+    "decel": 222,
 }
 is_olivia = player.strip().lower() == "olivia mcloughlin"
 avg_total_distance = OLIVIA_WEEKLY_AVERAGES["total_distance"] if is_olivia else None
