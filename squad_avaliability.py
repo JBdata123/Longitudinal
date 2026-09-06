@@ -6,21 +6,10 @@ manually-maintained "Squad Availability 2026-27.xlsx" file in Dropbox) next
 to their minutes played that day (computed from the same GPS data already
 loaded elsewhere in this app), plus a squad-wide availability summary at
 the bottom.
-
-ASSUMPTIONS THAT MAY NEED ADJUSTING -- see the comments marked >>> below:
-  1. gps_day (from your existing data_loader.load_data()) has raw columns
-     called "Period Name" and "Total Duration", matching a standard
-     Catapult export. If your data_loader renamed these, update the
-     column names in `compute_minutes_played` below.
-  2. A new Dropbox secret is needed for the availability file's path --
-     see DROPBOX_AVAILABILITY_PATH below. Add this to secrets.toml.
-  3. This assumes a multi-page Streamlit app (a "pages/" folder) -- if
-     your app is actually single-page, move this code into your main
-     script instead, calling it wherever you want the dashboard to show.
 """
 import io
 import unicodedata
-from datetime import datetime
+from datetime import datetime, date
 from zoneinfo import ZoneInfo
 
 import dropbox
@@ -34,10 +23,17 @@ from data_loader import load_data, CACHE_TTL_SECONDS
 st.set_page_config(page_title="Squad Availability", layout="wide")
 
 # ---------------------------------------------------------------------------
-# Reused, proven name-cleaning logic (same as the Supabase pipeline).
-# Two independently-maintained spreadsheets (this one, and the GPS export)
-# are exactly the kind of place a name mismatch silently breaks a join --
-# an accented name typed slightly differently, extra whitespace, etc.
+# SEASON MATCHES & LOG
+# Add games/sessions here as the season goes on!
+# Format: date(YYYY, MM, DD): {"location": "...", "score": "..."}
+# ---------------------------------------------------------------------------
+SEASON_MATCHES = {
+    date(2026, 9, 6): {"location": "Away vs Sheffield United", "score": "2 - 1"},
+}
+
+
+# ---------------------------------------------------------------------------
+# Reused name-cleaning logic
 # ---------------------------------------------------------------------------
 def normalize_name(name):
     """Strip whitespace, repair mojibake, and normalize Unicode so names
@@ -51,8 +47,7 @@ def normalize_name(name):
 
 
 # ---------------------------------------------------------------------------
-# Global CSS -- matches the navy/gold styling already used elsewhere in
-# this app.
+# Global CSS
 # ---------------------------------------------------------------------------
 st.markdown(f"""
 <style>
@@ -65,10 +60,7 @@ st.markdown(f"""
 
 
 # ---------------------------------------------------------------------------
-# Download + cache the availability Excel file from Dropbox.
-# >>> ADD "availability_path" TO YOUR secrets.toml, e.g.:
-#     [dropbox]
-#     availability_path = "/Club Data/Squad Availability 2026-27.xlsx"
+# Download + cache the availability Excel file from Dropbox
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=CACHE_TTL_SECONDS)
 def load_availability(_cache_buster):
@@ -77,8 +69,6 @@ def load_availability(_cache_buster):
         app_key=st.secrets["dropbox"]["app_key"],
         app_secret=st.secrets["dropbox"]["app_secret"],
     )
-    # Same team-space handling as the main pipeline -- Business/Team Dropbox
-    # accounts store files outside the connecting member's personal folder.
     try:
         account = dbx.users_get_current_account()
         root_info = getattr(account, "root_info", None)
@@ -98,17 +88,9 @@ def load_availability(_cache_buster):
 
 
 # ---------------------------------------------------------------------------
-# Compute minutes played per player, for one date, from the GPS data
-# already loaded by the rest of this app -- no second Dropbox download.
-#
-# >>> If your gps_day dataframe uses different column names than the raw
-# >>> Catapult export ("Period Name", "Total Duration"), update them here.
+# Minutes Played Calculation
 # ---------------------------------------------------------------------------
 def parse_duration_to_minutes(duration_text):
-    """Parses an HH:MM:SS string into minutes. Returns 0 for anything
-    that isn't a clean HH:MM:SS string (blank, malformed, etc.) rather
-    than crashing -- matching the defensive parsing pattern used
-    throughout the Supabase pipeline for this exact kind of field."""
     text = str(duration_text).strip()
     if len(text) < 8:
         return 0
@@ -122,9 +104,6 @@ def parse_duration_to_minutes(duration_text):
 
 
 def compute_minutes_played(gps_day, selected_date):
-    """Returns {normalized_player_name: minutes_played} for one date,
-    summing 1st Half + 2nd Half duration -- matching the same convention
-    used throughout the Supabase pipeline for match-day totals."""
     day_rows = gps_day[gps_day["Date"].dt.date == selected_date].copy()
     if day_rows.empty:
         return {}
@@ -140,8 +119,7 @@ def compute_minutes_played(gps_day, selected_date):
     half_rows["_minutes"] = half_rows["Total Duration"].apply(parse_duration_to_minutes)
     half_rows["_player_norm"] = half_rows["Player Name"].apply(normalize_name)
 
-    minutes_by_player = half_rows.groupby("_player_norm")["_minutes"].sum().to_dict()
-    return minutes_by_player
+    return half_rows.groupby("_player_norm")["_minutes"].sum().to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -247,11 +225,11 @@ available_pct = (available_count / total_players * 100) if total_players > 0 els
 
 
 # ---------------------------------------------------------------------------
-# MATCH METADATA BANNER (Location & Score)
-# Update these values or read them dynamically from your dataset/file.
+# LOOKUP MATCH METADATA FOR SELECTED DATE
 # ---------------------------------------------------------------------------
-location = ""     # e.g., "Home vs Arsenal" or "Training Ground"
-match_score = ""  # e.g., "2 - 1"
+match_info = SEASON_MATCHES.get(selected_date, {})
+location = match_info.get("location", "")
+match_score = match_info.get("score", "")
 
 meta_html = ""
 if location or match_score:
