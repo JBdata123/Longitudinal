@@ -235,15 +235,11 @@ meta_html = ""
 if location or match_score:
     meta_parts = []
     if location:
-        meta_parts.append(f"📍 {location}")
+        meta_parts.append(f" {location}")
     if match_score:
-        meta_parts.append(f"⚽ Score: {match_score}")
+        meta_parts.append(f" Score: {match_score}")
     meta_text = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(meta_parts)
-    meta_html = f"""
-    <div style='background:{NAVY};color:{GOLD};text-align:center;padding:8px;font-size:14px;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.2)'>
-        {meta_text}
-    </div>
-    """
+    meta_html = f"<div style='background:{NAVY};color:{GOLD};text-align:center;padding:8px;font-size:14px;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.2)'>{meta_text}</div>"
 
 table_html = f"""
 <div style='font-family:{FONT};max-width:600px;margin:20px auto;border:2px solid {NAVY};border-radius:6px;overflow:hidden'>
