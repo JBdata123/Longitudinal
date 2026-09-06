@@ -18,6 +18,7 @@ ASSUMPTIONS THAT MAY NEED ADJUSTING -- see the comments marked >>> below:
      your app is actually single-page, move this code into your main
      script instead, calling it wherever you want the dashboard to show.
 """
+import io
 import unicodedata
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -89,7 +90,6 @@ def load_availability(_cache_buster):
 
     path = st.secrets["dropbox"]["availability_path"]
     _, resp = dbx.files_download(path)
-    import io
     df = pd.read_excel(io.BytesIO(resp.content))
 
     df["Name"] = df["Name"].apply(normalize_name)
@@ -245,8 +245,31 @@ available_count = (
 )
 available_pct = (available_count / total_players * 100) if total_players > 0 else 0
 
+
+# ---------------------------------------------------------------------------
+# MATCH METADATA BANNER (Location & Score)
+# Update these values or read them dynamically from your dataset/file.
+# ---------------------------------------------------------------------------
+location = ""     # e.g., "Home vs Arsenal" or "Training Ground"
+match_score = ""  # e.g., "2 - 1"
+
+meta_html = ""
+if location or match_score:
+    meta_parts = []
+    if location:
+        meta_parts.append(f"📍 {location}")
+    if match_score:
+        meta_parts.append(f"⚽ Score: {match_score}")
+    meta_text = " &nbsp;&nbsp;|&nbsp;&nbsp; ".join(meta_parts)
+    meta_html = f"""
+    <div style='background:{NAVY};color:{GOLD};text-align:center;padding:8px;font-size:14px;font-weight:700;border-bottom:1px solid rgba(255,255,255,0.2)'>
+        {meta_text}
+    </div>
+    """
+
 table_html = f"""
 <div style='font-family:{FONT};max-width:600px;margin:20px auto;border:2px solid {NAVY};border-radius:6px;overflow:hidden'>
+{meta_html}
 <table style='width:100%;border-collapse:collapse'>
 <tr style='background:{NAVY};color:{WHITE}'>
 <th style='padding:10px 12px;text-align:left'>Name</th>
