@@ -174,6 +174,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+refresh_col1, refresh_col2, refresh_col3 = st.columns([3, 1, 3])
+with refresh_col2:
+    if st.button("🔄 Refresh data now", key="availability_refresh_button"):
+        st.session_state.cache_buster += 1
+        load_data.clear()
+        load_availability.clear()
+        st.rerun()
+    st.markdown(
+        f"<div style='font-size:10.5px;opacity:0.7;text-align:center;margin-top:2px'>"
+        f"Auto-refreshes every {CACHE_TTL_SECONDS}s &middot; last loaded "
+        f"{datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK</div>",
+        unsafe_allow_html=True,
+    )
+
 if "cache_buster" not in st.session_state:
     st.session_state.cache_buster = 0
 
