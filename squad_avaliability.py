@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import dropbox
 import pandas as pd
 import streamlit as st
+from streamlit_autorefresh import st_autorefresh
 
 from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar
 from data_loader import load_data, CACHE_TTL_SECONDS
@@ -163,11 +164,13 @@ def availability_badge(status):
 # ---------------------------------------------------------------------------
 # Header + date picker
 # ---------------------------------------------------------------------------
+st_autorefresh(interval=CACHE_TTL_SECONDS * 1000, key="availability_auto_refresh")
+
 st.markdown(
     f"<div style='background-color:{NAVY};border-bottom:5px solid {GOLD};"
-    f"padding:14px 24px;text-align:center'>"
+    f"padding:18px 24px;text-align:center;overflow:visible;white-space:nowrap'>"
     f"<span style='color:{WHITE};font-size:32px;font-weight:800;letter-spacing:1px;"
-    f"font-family:{FONT}'>SQUAD AVAILABILITY</span></div>",
+    f"line-height:1.4;font-family:{FONT}'>SQUAD AVAILABILITY</span></div>",
     unsafe_allow_html=True,
 )
 
@@ -226,6 +229,7 @@ available_count = (
     day_availability.get("Avaliability", day_availability.get("Availability", pd.Series(dtype=str)))
     .astype(str).str.strip().str.lower().eq("yes").sum()
 )
+available_pct = (available_count / total_players * 100) if total_players > 0 else 0
 
 table_html = f"""
 <div style='font-family:{FONT};max-width:600px;margin:20px auto;border:2px solid {NAVY};border-radius:6px;overflow:hidden'>
@@ -238,7 +242,7 @@ table_html = f"""
 {rows_html}
 </table>
 <div style='background:{NAVY};color:{WHITE};text-align:center;padding:12px;font-weight:700;font-size:15px;border-top:3px solid {GOLD}'>
-Squad Availability: {available_count} / {total_players}
+Squad Availability: {available_count} / {total_players} ({available_pct:.0f}%)
 </div>
 </div>
 """
