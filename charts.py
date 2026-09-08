@@ -101,7 +101,7 @@ def _weekly_labels(grouped, week_col="Week Number"):
 
 
 def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_value, bar_color: str,
-                         week_col="Week Number", fmt="{:.0f}") -> go.Figure:
+                         week_col="Week Number", fmt="{:.0f}", bullet_marker=None) -> go.Figure:
     """Weekly summary bar: [Average (grey)] | divider | [Week -1] [Week -2] ...
     If avg_value is None, the average is computed live as the mean of this
     player's own weekly totals so far, rather than a fixed hardcoded value."""
@@ -122,16 +122,33 @@ def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_valu
     )
     fig.update_layout(bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
+    
     max_y = max(y) if y else 1
+    if bullet_marker is not None:
+        max_y = max(max_y, bullet_marker)
+        
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
     fig.add_shape(
         type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
         line=dict(color=WHITE, width=1.5, dash="dot"),
     )
+
+    # Bullet marker reference line (Week Max)
+    if bullet_marker is not None:
+        fig.add_hline(
+            y=bullet_marker,
+            line_dash="dash",
+            line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5,
+            annotation_text=bold(f"Max: {bullet_marker:.0f}"),
+            annotation_position="top right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
+
     return fig
 
 
-def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number") -> go.Figure:
+def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number", bullet_marker=None) -> go.Figure:
     """Weekly HSR+SD stacked summary: [Average (grey, single block)] | divider |
     [Week -1 (gold HSR + red SD stacked)] [Week -2] ...
     If avg_value is None, the average is computed live as the mean of this
@@ -168,12 +185,29 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
     )
     fig.update_layout(barmode="stack", bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
+    
     max_y = max(hsr_y[0], max((h + s for h, s in zip(hsr_y[1:], sd_y[1:])), default=0))
+    if bullet_marker is not None:
+        max_y = max(max_y, bullet_marker)
+
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
     fig.add_shape(
         type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
         line=dict(color=WHITE, width=1.5, dash="dot"),
     )
+
+    # Bullet marker reference line (Week Max)
+    if bullet_marker is not None:
+        fig.add_hline(
+            y=bullet_marker,
+            line_dash="dash",
+            line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5,
+            annotation_text=bold(f"Max: {bullet_marker:.0f}"),
+            annotation_position="top right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
+
     return fig
 
 
