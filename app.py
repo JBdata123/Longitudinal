@@ -165,9 +165,7 @@ if gps_player_all.empty:
     st.warning("No GPS data found for this player in the selected date range.")
     st.stop()
 
-# build one row per CALENDAR date in the selected range (not just training
-# days), so rest days appear on the charts as an empty bar with just the
-# date - no value shown, since nothing happened that day.
+# build one row per CALENDAR date in the selected range
 full_calendar = pd.DataFrame({"Date": pd.date_range(start_date, end_date, freq="D")})
 gps_player_display = full_calendar.merge(gps_player_all, on="Date", how="left")
 fb_player_display = (
@@ -194,18 +192,34 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
     st.plotly_chart(fig, width="stretch", config=plot_config, key=key, theme=None)
 
 
-# ---------------------------------------------------------------- weekly summary boxes
-OLIVIA_WEEKLY_AVERAGES = {
-    "total_distance": 30096,
-    "hsr_sd": 712,
-    "accel": 230,
-    "decel": 222,
+# ---------------------------------------------------------------- weekly summary configuration
+PLAYER_METRICS = {
+    "olivia mcloughlin": {
+        "avg": {"total_distance": 30096, "hsr_sd": 712, "accel": 230, "decel": 222},
+        "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327},
+    },
+    "emma jansson": {
+        "avg": {"total_distance": 28300, "hsr_sd": 690 + 72, "accel": 290, "decel": 302},
+        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337},
+    },
+    "celeste boureille": {
+        "avg": {"total_distance": 8414, "hsr_sd": 235 + 13, "accel": 79, "decel": 63},
+        "max": {"total_distance": 31848, "hsr_sd": 1036 + 189, "accel": 381, "decel": 276},
+    },
 }
-is_olivia = player.strip().lower() == "olivia mcloughlin"
-avg_total_distance = OLIVIA_WEEKLY_AVERAGES["total_distance"] if is_olivia else None
-avg_hsr_sd = OLIVIA_WEEKLY_AVERAGES["hsr_sd"] if is_olivia else None
-avg_accel = OLIVIA_WEEKLY_AVERAGES["accel"] if is_olivia else None
-avg_decel = OLIVIA_WEEKLY_AVERAGES["decel"] if is_olivia else None
+
+player_key = player.strip().lower()
+player_data = PLAYER_METRICS.get(player_key, {"avg": {}, "max": {}})
+
+avg_total_distance = player_data["avg"].get("total_distance")
+avg_hsr_sd = player_data["avg"].get("hsr_sd")
+avg_accel = player_data["avg"].get("accel")
+avg_decel = player_data["avg"].get("decel")
+
+max_total_distance = player_data["max"].get("total_distance")
+max_hsr_sd = player_data["max"].get("hsr_sd")
+max_accel = player_data["max"].get("accel")
+max_decel = player_data["max"].get("decel")
 
 wk1, wk2, wk3, wk4 = st.columns(4)
 with wk1:
@@ -213,6 +227,7 @@ with wk1:
         "Weekly Total Distance",
         charts.chart_weekly_single(
             gps_player_full, "Total Distance", avg_total_distance, charts.GOLD,
+            bullet_marker=max_total_distance,
         ),
         key="chart_weekly_total_distance",
         legend_items=charts.LEGEND_WEEKLY_TOTAL_DISTANCE,
@@ -220,7 +235,10 @@ with wk1:
 with wk2:
     render_panel(
         "Weekly HSR + SD",
-        charts.chart_weekly_hsr_sd(gps_player_full, avg_hsr_sd),
+        charts.chart_weekly_hsr_sd(
+            gps_player_full, avg_hsr_sd,
+            bullet_marker=max_hsr_sd,
+        ),
         key="chart_weekly_hsr_sd",
         legend_items=charts.LEGEND_WEEKLY_HSR_SD,
     )
@@ -229,6 +247,7 @@ with wk3:
         "Weekly Accelerations",
         charts.chart_weekly_single(
             gps_player_full, "Acceleration B1-3 Total Efforts (Gen 2)", avg_accel, charts.GREEN,
+            bullet_marker=max_accel,
         ),
         key="chart_weekly_accel",
         legend_items=charts.LEGEND_WEEKLY_ACCEL,
@@ -238,6 +257,7 @@ with wk4:
         "Weekly Decelerations",
         charts.chart_weekly_single(
             gps_player_full, "Deceleration B1-3 Total Efforts (Gen 2)", avg_decel, charts.RED,
+            bullet_marker=max_decel,
         ),
         key="chart_weekly_decel",
         legend_items=charts.LEGEND_WEEKLY_DECEL,
