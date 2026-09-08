@@ -83,6 +83,24 @@ def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float
     return [daily_counts.get(d) for d in dates_shown]
 
 
+def _to_minutes(t):
+    """Helper to convert time representations (Timedelta, string, datetime.time) to minutes."""
+    if pd.isna(t):
+        return 0
+    if isinstance(t, pd.Timedelta):
+        return t.total_seconds() / 60
+    if hasattr(t, "hour"):
+        return t.hour * 60 + t.minute + t.second / 60
+    s = str(t).strip()
+    if "days" in s:  # pandas Timedelta prints as "0 days 00:12:34"
+        s = s.split()[-1]
+    try:
+        h, m, sec = [float(p) for p in s.split(":")]
+        return h * 60 + m + sec / 60
+    except Exception:
+        return 0
+
+
 # ---------------------------------------------------------------- Weekly summary helpers
 def _weekly_grouped(gps_full_history: pd.DataFrame, week_col="Week Number", **agg_cols):
     """Groups full history by Week Number, sums the requested value column(s),
@@ -204,6 +222,56 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
             line_color="rgba(255, 255, 255, 0.85)",
             line_width=1.5,
             annotation_text=bold(f"Max: {bullet_marker:.0f}"),
+            annotation_position="top right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
+
+    return fig
+
+
+def chart_weekly_hr_hi(fb_full_history: pd.DataFrame, avg_value=None, week_col="Week Number", bullet_marker=None) -> go.Figure:
+    """Weekly High Intensity HR (>90% Max) summary bar."""
+    hist = fb_full_history.dropna(subset=[week_col]).copy()
+    hist["_hi_mins"] = hist["High intensity training (hh:mm:ss)"].apply(_to_minutes)
+    
+    grouped = _weekly_grouped(hist, week_col, total="_hi_mins")
+    week_labels = _weekly_labels(grouped, week_col)
+    week_values = grouped["total"].round(0)
+    
+    if avg_value is None:
+        avg_value = week_values.mean() if len(week_values) else 0
+        
+    x = ["Average"] + week_labels
+    y = [avg_value] + list(week_values)
+    colors = [GREY] + [RED] * len(week_labels)
+    text = [bold(f"{v:.0f}m") for v in y]
+    
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=y, marker_color=colors, text=text, textposition="outside",
+        textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
+        constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip",
+    )
+    fig.update_layout(bargap=_bargap_for(len(x)))
+    fig = base_layout(fig, n_dates=len(x))
+    
+    max_y = max(y) if y else 1
+    if bullet_marker is not None:
+        max_y = max(max_y, bullet_marker)
+        
+    fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
+    fig.add_shape(
+        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
+        line=dict(color=WHITE, width=1.5, dash="dot"),
+    )
+
+    if bullet_marker is not None:
+        fig.add_hline(
+            y=bullet_marker,
+            line_dash="dash",
+            line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5,
+            annotation_text=bold(f"Max: {bullet_marker:.0f}m"),
             annotation_position="top right",
             annotation_font=dict(family=FONT, size=11, color=WHITE),
         )
@@ -360,52 +428,42 @@ def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
     return fig
 
 
-# ---------------------------------------------------------------- Chart 5 (HR zones, stacked)
+# ---------------------------------------------------------------- Chart 5 (High Intensity Minutes - HR > 90% Max)
 def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
     x = _x_labels(fb_player)
     bargap = _bargap_for(len(x))
 
-    def _to_minutes(t):
-        if pd.isna(t):
-            return 0
-        if isinstance(t, pd.Timedelta):
-            return t.total_seconds() / 60
-        if hasattr(t, "hour"):
-            return t.hour * 60 + t.minute + t.second / 60
-        s = str(t).strip()
-        if "days" in s:  # pandas Timedelta prints as "0 days 00:12:34"
-            s = s.split()[-1]
-        h, m, sec = [float(p) for p in s.split(":")]
-        return h * 60 + m + sec / 60
-
     def to_min(col):
         return fb_player[col].apply(_to_minutes).round(1)
 
-    aer2 = to_min("Aerobic zone 2 (hh:mm:ss)")     # 70-79% HR Max
-    anth = to_min("Anaerobic threshold zone (hh:mm:ss)")  # 80-89% HR Max
-    hi = to_min("High intensity training (hh:mm:ss)")     # 90%+ HR Max
-    has_aer2 = fb_player["Aerobic zone 2 (hh:mm:ss)"].notna()
-    has_anth = fb_player["Anaerobic threshold zone (hh:mm:ss)"].notna()
+    hi = to_min("High intensity training (hh:mm:ss)")
     has_hi = fb_player["High intensity training (hh:mm:ss)"].notna()
+
     fig = go.Figure()
-    fig.add_bar(x=x, y=aer2, marker_color=DARK_GOLD, text=_bold_labels_masked(aer2, has_aer2, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="70-79% HR Max")
-    fig.add_bar(x=x, y=anth, marker_color=GOLD, text=_bold_labels_masked(anth, has_anth, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="80-89% HR Max")
-    fig.add_bar(x=x, y=hi, marker_color=RED, text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
-                textposition="inside", insidetextanchor="middle",
-                textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-                constraintext="none", textangle=0, hoverinfo="skip", name="90%+ HR Max")
-    fig.update_layout(barmode="stack", bargap=bargap)
-    top = aer2 + anth + hi
+    fig.add_bar(
+        x=x,
+        y=hi,
+        marker_color=RED,
+        text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
+        textposition="outside",
+        cliponaxis=False,
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none",
+        textangle=0,
+        hoverinfo="skip",
+        name=">90% HR Max",
+    )
+
+    fig.update_layout(bargap=bargap)
+
     te_max = fb_player[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
     te_vals = [round(v, 1) if pd.notna(v) else None for v in te_max]
+
     fig = base_layout(fig, n_dates=len(x))
-    fig = _apply_value_row(fig, x, te_vals, top.max() if len(top) else 0, fmt="{:.1f}", color_fn=te_box_color)
+    fig = _apply_value_row(
+        fig, x, te_vals, hi.max() if len(hi) else 0, fmt="{:.1f}", color_fn=te_box_color
+    )
+
     return fig
 
 
@@ -413,7 +471,7 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
 LEGEND_TOTAL_DISTANCE = [(GREY, "Total Distance"), (GOLD, "Metres per Minute")]
 LEGEND_MAX_SPEED = [(GREY, "Max Speed"), (GOLD, "Max Speed %")]
 LEGEND_HSR_SD = [(GOLD, "HSR"), (RED, "Sprint Distance")]
-LEGEND_HR_ZONES = [(DARK_GOLD, "70-79% HR Max"), (GOLD, "80-89% HR Max"), (RED, "90%+ HR Max")]
+LEGEND_HR_ZONES = [(RED, ">90% HR Max (High Intensity)")]
 
 
 def legend_accel_decel(label_suffix):
@@ -425,3 +483,4 @@ LEGEND_WEEKLY_TOTAL_DISTANCE = [(GREY, "Average"), (GOLD, "Weekly Total Distance
 LEGEND_WEEKLY_HSR_SD = [(GREY, "Average"), (GOLD, "HSR"), (RED, "Sprint Distance")]
 LEGEND_WEEKLY_ACCEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations")]
 LEGEND_WEEKLY_DECEL = [(GREY, "Average"), (RED, "Weekly Decelerations")]
+LEGEND_WEEKLY_HR_HI = [(GREY, "Average"), (RED, "Weekly High Intensity HR (>90%)")]
