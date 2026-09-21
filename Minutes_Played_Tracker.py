@@ -179,16 +179,43 @@ matches_sorted = (
     .drop_duplicates()
     .sort_values("session_date")
 )
-column_order = matches_sorted["match_label"].tolist()
+match_columns = matches_sorted["match_label"].tolist()
 
 pivot = data.pivot_table(
     index="player", columns="match_label", values="minutes", aggfunc="sum"
 )
+
+# Calculate total minutes across all matches for each player
+pivot["Total"] = pivot.sum(axis=1)
+
+# Reindex to keep match columns in chronological order and append 'Total' at the end
+column_order = match_columns + ["Total"]
 pivot = pivot.reindex(columns=column_order)
 pivot = pivot.sort_index()
 
+# Color coding function based on minutes ranges
+def color_minutes(val):
+    if pd.isna(val):
+        return ""
+    if val > 75:
+        # Green with clear white text
+        return "background-color: #2e7d32; color: #ffffff; font-weight: bold;"
+    elif 45 <= val <= 74:
+        # Gold/Yellow with dark navy text
+        return "background-color: #fdbe11; color: #0a192f; font-weight: bold;"
+    else:
+        # Red with clear white text
+        return "background-color: #d32f2f; color: #ffffff; font-weight: bold;"
+
+# Apply styling to match columns only (excluding Total)
+styled_pivot = (
+    pivot.style
+    .map(color_minutes, subset=match_columns)
+    .format(precision=0, na_rep="-")
+)
+
 st.dataframe(
-    pivot.style.format(precision=0, na_rep="-"),
+    styled_pivot,
     width="stretch",
     height=min(800, 46 * (len(pivot) + 1)),
 )
