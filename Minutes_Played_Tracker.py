@@ -42,7 +42,7 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
 
     Filtered to genuine match days only (gps_day is EXACTLY 'MD' -- not
     'MD-1'/'MD-2', which are training days that happen to share the same
-    prefix) and to 05/09/2026 onward."""
+    prefix)."""
     conn = psycopg2.connect(st.secrets["supabase"]["db_url"])
     try:
         query = """
@@ -59,7 +59,6 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
               and position <> 'Goalkeeper'
               and session_date is not null
               and upper(trim(gps_day)) = 'MD'
-              and session_date >= '2026-09-05'
         """
         df = pd.read_sql(query, conn)
     finally:
@@ -134,7 +133,7 @@ with btn_col:
         st.rerun()
 
 if data.empty:
-    st.warning("No MD match data found for 05/09/2026 onward yet.")
+    st.warning("No MD match data found.")
     st.stop()
 
 # ---------------------------------------------------------------- match label format
