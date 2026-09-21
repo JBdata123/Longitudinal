@@ -40,9 +40,8 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
     context. Pulls straight from master_data, so it automatically stays in
     sync with the same match-day parsing the rest of the project relies on.
 
-    Filtered to genuine match days only (gps_day is EXACTLY 'MD' -- not
-    'MD-1'/'MD-2', which are training days that happen to share the same
-    prefix)."""
+    Filtered to genuine match/game days only (gps_day is EXACTLY 'MD' or contains 'GAME',
+    excluding lead-up days like 'MD-1'/'MD-2')."""
     conn = psycopg2.connect(st.secrets["supabase"]["db_url"])
     try:
         query = """
@@ -55,10 +54,13 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
                 match_competition,
                 gps_total_duration
             from master_data
-            where drill_label in ('1ST HALF', '2ND HALF')
+            where upper(trim(drill_label)) in ('1ST HALF', '2ND HALF', 'FIRST HALF', 'SECOND HALF')
               and position <> 'Goalkeeper'
               and session_date is not null
-              and upper(trim(gps_day)) = 'MD'
+              and (
+                  upper(trim(gps_day)) = 'MD' 
+                  or upper(gps_day) like '%GAME%'
+              )
         """
         df = pd.read_sql(query, conn)
     finally:
@@ -133,7 +135,7 @@ with btn_col:
         st.rerun()
 
 if data.empty:
-    st.warning("No MD match data found.")
+    st.warning("No MD/Game match data found.")
     st.stop()
 
 # ---------------------------------------------------------------- match label format
