@@ -22,7 +22,6 @@ from data_loader import CACHE_TTL_SECONDS
 st.set_page_config(page_title="Minutes Played Tracker", layout="wide")
 
 # ---------------------------------------------------------------- global CSS
-# Same navy/gold header bar convention as the main Longitudinal Report page
 st.markdown(f"""
 <style>
     .stApp {{ background-color: {WHITE}; }}
@@ -33,7 +32,7 @@ st.markdown(f"""
         border: none !important;
         border-bottom: 5px solid {GOLD} !important;
         border-radius: 0 !important;
-        padding: 10px 24px 20px 24px !important;
+        padding: 16px 24px 16px 24px !important;
         box-shadow: none !important;
     }}
     .st-key-header_bar, .st-key-header_bar * {{
@@ -68,7 +67,15 @@ st.markdown(f"""
     .st-key-refresh_box .stButton {{
         width: fit-content !important;
     }}
-    h1 {{ text-align: center; }}
+    .header-title {{
+        font-size: clamp(20px, 3vw, 36px);
+        font-weight: 800;
+        letter-spacing: 1px;
+        text-align: center;
+        line-height: 1.2;
+        margin: 0;
+        padding: 0;
+    }}
     /* Table styling to match the navy/gold theme */
     .stDataFrame {{ border: 1px solid {NAVY}22; }}
 </style>
@@ -91,6 +98,7 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
             select
                 "player",
                 session_date,
+                gps_week_number,
                 match_opposition,
                 match_location,
                 match_competition,
@@ -119,10 +127,14 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
             return 0.0
 
     df["minutes"] = df["gps_total_duration"].apply(parse_duration_to_minutes)
+    df["session_date"] = pd.to_datetime(df["session_date"])
 
     grouped = (
-        df.groupby(["session_date", "player", "match_opposition", "match_location", "match_competition"], dropna=False)
-        ["minutes"].sum()
+        df.groupby(
+            ["session_date", "gps_week_number", "player", "match_opposition", "match_location", "match_competition"], 
+            dropna=False
+        )["minutes"]
+        .sum()
         .reset_index()
     )
     return grouped
@@ -144,8 +156,7 @@ with st.container(key="header_bar", border=True):
     header_col, refresh_col = st.columns([5, 1.6])
     with header_col:
         st.markdown(
-            "<div style='font-size:40px; font-weight:800; letter-spacing:1px; "
-            "text-align:center; padding:4px 0 10px 0;'>MINUTES PLAYED TRACKER</div>",
+            "<div class='header-title'>MINUTES PLAYED TRACKER</div>",
             unsafe_allow_html=True,
         )
     with refresh_col:
@@ -165,27 +176,74 @@ if data.empty:
     st.warning("No MD match data found for 05/09/2026 onward yet.")
     st.stop()
 
-# ---------------------------------------------------------------- build the longitudinal table
+# ---------------------------------------------------------------- match label format
 def format_match_label(row):
     opposition = row["match_opposition"] if pd.notna(row["match_opposition"]) else "Unknown"
     loc_letter = str(row["match_location"])[:1].upper() if pd.notna(row["match_location"]) else "?"
     competition = row["match_competition"] if pd.notna(row["match_competition"]) else "?"
-    return f"{opposition} - {loc_letter} - {competition}"
+    date_str = row["session_date"].strftime("%d/%m/%Y") if pd.notna(row["session_date"]) else "??"
+    return f"{opposition} - {loc_letter} - {competition} - {date_str}"
 
 data["match_label"] = data.apply(format_match_label, axis=1)
 
+# ---------------------------------------------------------------- filters
+st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
+filter_col1, filter_col2 = st.columns(2)
+
+# 1. GPS Week Number Filter
+available_weeks = sorted([w for w in data["gps_week_number"].dropna().unique()])
+week_options = ["All"] + list(available_weeks)
+
+with filter_col1:
+    selected_weeks = st.multiselect(
+        "Filter by GPS Week Number",
+        options=week_options,
+        default=["All"],
+        help="Select specific week numbers or leave 'All' selected."
+    )
+
+if "All" in selected_weeks or not selected_weeks:
+    filtered_data = data.copy()
+else:
+    filtered_data = data[data["gps_week_number"].isin(selected_weeks)].copy()
+
+# 2. Match Specific Filter
+available_matches = (
+    filtered_data[["session_date", "match_label"]]
+    .drop_duplicates()
+    .sort_values("session_date")["match_label"]
+    .tolist()
+)
+match_options = ["All"] + available_matches
+
+with filter_col2:
+    selected_matches = st.multiselect(
+        "Filter by Match",
+        options=match_options,
+        default=["All"],
+        help="Select specific matches to display."
+    )
+
+if "All" not in selected_matches and selected_matches:
+    filtered_data = filtered_data[filtered_data["match_label"].isin(selected_matches)]
+
+# ---------------------------------------------------------------- build the longitudinal table
+if filtered_data.empty:
+    st.info("No matches match the selected filter criteria.")
+    st.stop()
+
 matches_sorted = (
-    data[["session_date", "match_label"]]
+    filtered_data[["session_date", "match_label"]]
     .drop_duplicates()
     .sort_values("session_date")
 )
 match_columns = matches_sorted["match_label"].tolist()
 
-pivot = data.pivot_table(
+pivot = filtered_data.pivot_table(
     index="player", columns="match_label", values="minutes", aggfunc="sum"
 )
 
-# Calculate total minutes across all matches for each player
+# Calculate total minutes across selected matches for each player
 pivot["Total"] = pivot.sum(axis=1)
 
 # Reindex to keep match columns in chronological order and append 'Total' at the end
@@ -198,13 +256,10 @@ def color_minutes(val):
     if pd.isna(val):
         return ""
     if val > 75:
-        # Green with clear white text
         return "background-color: #2e7d32; color: #ffffff; font-weight: bold;"
     elif 45 <= val <= 74:
-        # Gold/Yellow with dark navy text
         return "background-color: #fdbe11; color: #0a192f; font-weight: bold;"
     else:
-        # Red with clear white text
         return "background-color: #d32f2f; color: #ffffff; font-weight: bold;"
 
 # Apply styling to match columns only (excluding Total)
