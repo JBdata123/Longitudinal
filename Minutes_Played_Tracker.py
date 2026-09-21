@@ -26,67 +26,6 @@ st.markdown(f"""
 <style>
     .stApp {{ background-color: {WHITE}; }}
     #MainMenu, footer {{visibility: hidden;}}
-    div.block-container {{ padding-top: 0rem; }}
-    
-    /* Header container styling */
-    .st-key-header_bar {{
-        background-color: {NAVY} !important;
-        border: none !important;
-        border-bottom: 5px solid {GOLD} !important;
-        border-radius: 0 !important;
-        padding: 10px 20px !important;
-        box-shadow: none !important;
-    }}
-    .st-key-header_bar, .st-key-header_bar * {{
-        color: {WHITE} !important;
-    }}
-    .st-key-header_bar [data-testid="column"] {{
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }}
-    
-    /* Button styling */
-    .st-key-header_bar .stButton > button {{
-        background-color: {NAVY} !important;
-        color: {WHITE} !important;
-        border: 1px solid {WHITE} !important;
-    }}
-    .st-key-header_bar .stButton > button:hover,
-    .st-key-header_bar .stButton > button:active,
-    .st-key-header_bar .stButton > button:focus,
-    .st-key-header_bar .stButton > button:focus:not(:active) {{
-        background-color: {NAVY} !important;
-        color: {WHITE} !important;
-        border: 1px solid {WHITE} !important;
-        box-shadow: none !important;
-    }}
-    .st-key-refresh_box {{
-        border: none !important;
-        box-shadow: none !important;
-        padding: 0 !important;
-        background: transparent !important;
-        display: flex !important;
-        flex-direction: column !important;
-        align-items: flex-end !important;
-        width: 100% !important;
-    }}
-    .st-key-refresh_box .stButton {{
-        width: fit-content !important;
-    }}
-    
-    /* Title text styling - auto-scales and wraps safely */
-    .header-title {{
-        font-size: clamp(20px, 2.8vw, 32px);
-        font-weight: 800;
-        letter-spacing: 1px;
-        text-align: center;
-        line-height: 1.1;
-        margin: 0;
-        padding: 0;
-        white-space: normal;
-        word-break: break-word;
-    }}
     
     /* Table styling to match the navy/gold theme */
     .stDataFrame {{ border: 1px solid {NAVY}22; }}
@@ -164,25 +103,35 @@ except Exception as e:
 
 
 # ---------------------------------------------------------------- header bar
-with st.container(key="header_bar", border=True):
-    header_col, refresh_col = st.columns([4, 1])
-    with header_col:
-        st.markdown(
-            "<div class='header-title'>MINUTES PLAYED TRACKER</div>",
-            unsafe_allow_html=True,
-        )
-    with refresh_col:
-        with st.container(key="refresh_box", border=True):
-            if st.button("🔄 Refresh data now"):
-                st.session_state.cache_buster += 1
-                load_match_minutes.clear()
-                st.rerun()
-            st.markdown(
-                f"<div style='font-size:10.5px; opacity:0.85; margin-top:4px; "
-                f"margin-bottom:2px; white-space:nowrap; text-align:right;'>"
-                f"last loaded {datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK</div>",
-                unsafe_allow_html=True,
-            )
+st.markdown(
+    f"""
+    <div style="
+        background-color: {NAVY};
+        border-bottom: 5px solid {GOLD};
+        padding: 16px 24px;
+        margin-bottom: 20px;
+        color: {WHITE};
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    ">
+        <div style="font-size: 28px; font-weight: 800; letter-spacing: 1px; color: {WHITE};">
+            MINUTES PLAYED TRACKER
+        </div>
+        <div style="font-size: 11px; opacity: 0.85; text-align: right; color: {WHITE}; white-space: nowrap;">
+            last loaded {datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+btn_col, _ = st.columns([2, 8])
+with btn_col:
+    if st.button("🔄 Refresh data now"):
+        st.session_state.cache_buster += 1
+        load_match_minutes.clear()
+        st.rerun()
 
 if data.empty:
     st.warning("No MD match data found for 05/09/2026 onward yet.")
@@ -199,7 +148,6 @@ def format_match_label(row):
 data["match_label"] = data.apply(format_match_label, axis=1)
 
 # ---------------------------------------------------------------- filters
-st.markdown("<div style='height: 12px;'></div>", unsafe_allow_html=True)
 filter_col1, filter_col2 = st.columns(2)
 
 # 1. GPS Week Number Filter
