@@ -1,5 +1,5 @@
 """
-Minutes Played Tracker.
+Minutes Played Tracker -- longitudinal season view.
 
 Pulls match data directly from Supabase (not Dropbox) -- match-day period
 parsing, opponent info, and scores all already live correctly there from
@@ -13,7 +13,6 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-import plotly.graph_objects as go
 import psycopg2
 import streamlit as st
 
@@ -37,41 +36,8 @@ st.markdown(f"""
         padding: 10px 24px 20px 24px !important;
         box-shadow: none !important;
     }}
-    .st-key-header_bar div[data-testid="stHorizontalBlock"] {{
-        align-items: center !important;
-    }}
     .st-key-header_bar, .st-key-header_bar * {{
         color: {WHITE} !important;
-    }}
-    .st-key-header_bar label, .st-key-header_bar p {{
-        color: {WHITE} !important;
-        font-family: {FONT};
-    }}
-    .st-key-header_bar [data-testid="stWidgetLabel"] {{
-        display: flex;
-        justify-content: center;
-        width: 100%;
-    }}
-    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] * {{
-        background-color: {NAVY} !important;
-        color: {WHITE} !important;
-        -webkit-text-fill-color: {WHITE} !important;
-        border-color: {WHITE} !important;
-        fill: {WHITE} !important;
-    }}
-    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] svg {{
-        display: none !important;
-    }}
-    div[data-baseweb="popover"] ul[role="listbox"] {{
-        background-color: {NAVY} !important;
-    }}
-    div[data-baseweb="popover"] li {{
-        background-color: {NAVY} !important;
-        color: {WHITE} !important;
-    }}
-    div[data-baseweb="popover"] li:hover {{
-        background-color: {GOLD} !important;
-        color: {NAVY} !important;
     }}
     .st-key-header_bar .stButton > button {{
         background-color: {NAVY} !important;
@@ -86,10 +52,6 @@ st.markdown(f"""
         color: {WHITE} !important;
         border: 1px solid {WHITE} !important;
         box-shadow: none !important;
-    }}
-    .st-key-header_bar div[data-testid="stHorizontalBlock"] > div:last-child {{
-        display: flex !important;
-        justify-content: flex-end !important;
     }}
     .st-key-refresh_box {{
         border: none !important;
@@ -106,7 +68,9 @@ st.markdown(f"""
     .st-key-refresh_box .stButton {{
         width: fit-content !important;
     }}
-    h1, h2, h3 {{ text-align: center; }}
+    h1 {{ text-align: center; }}
+    /* Table styling to match the navy/gold theme */
+    .stDataFrame {{ border: 1px solid {NAVY}22; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -116,7 +80,11 @@ st.markdown(f"""
 def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
     """One row per (player, match date), with minutes played and match
     context. Pulls straight from master_data, so it automatically stays in
-    sync with the same match-day parsing the rest of the project relies on."""
+    sync with the same match-day parsing the rest of the project relies on.
+
+    Filtered to genuine match days only (gps_day is EXACTLY 'MD' -- not
+    'MD-1'/'MD-2', which are training days that happen to share the same
+    prefix) and to 05/09/2026 onward."""
     conn = psycopg2.connect(st.secrets["supabase"]["db_url"])
     try:
         query = """
@@ -125,12 +93,14 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
                 session_date,
                 match_opposition,
                 match_location,
-                match_score,
+                match_competition,
                 gps_total_duration
             from master_data
             where drill_label in ('1ST HALF', '2ND HALF')
               and position <> 'Goalkeeper'
               and session_date is not null
+              and upper(trim(gps_day)) = 'MD'
+              and session_date >= '2026-09-05'
         """
         df = pd.read_sql(query, conn)
     finally:
@@ -151,7 +121,7 @@ def load_match_minutes(_cache_buster: int = 0) -> pd.DataFrame:
     df["minutes"] = df["gps_total_duration"].apply(parse_duration_to_minutes)
 
     grouped = (
-        df.groupby(["session_date", "player", "match_opposition", "match_location", "match_score"], dropna=False)
+        df.groupby(["session_date", "player", "match_opposition", "match_location", "match_competition"], dropna=False)
         ["minutes"].sum()
         .reset_index()
     )
@@ -168,37 +138,16 @@ except Exception as e:
     st.info("Check .streamlit/secrets.toml has a valid [supabase] db_url entry.")
     st.stop()
 
-if data.empty:
-    st.warning("No match data found yet.")
-    st.stop()
-
-games = (
-    data[["session_date", "match_opposition", "match_location", "match_score"]]
-    .drop_duplicates()
-    .sort_values("session_date", ascending=False)
-)
-
-def format_game_label(row):
-    date_str = pd.to_datetime(row["session_date"]).strftime("%d/%m/%Y")
-    opposition = row["match_opposition"] if pd.notna(row["match_opposition"]) else "Unknown opposition"
-    loc_letter = str(row["match_location"])[:1].upper() if pd.notna(row["match_location"]) else "?"
-    score = f" - {row['match_score']}" if pd.notna(row["match_score"]) else ""
-    return f"vs {opposition} ({loc_letter}){score} - {date_str}"
-
-games["label"] = games.apply(format_game_label, axis=1)
-game_labels = games["label"].tolist()
-
 
 # ---------------------------------------------------------------- header bar
 with st.container(key="header_bar", border=True):
-    st.markdown(
-        "<div style='font-size:40px; font-weight:800; letter-spacing:1px; "
-        "text-align:center; padding:4px 0 10px 0;'>MINUTES PLAYED TRACKER</div>",
-        unsafe_allow_html=True,
-    )
-    selector_col, refresh_col = st.columns([4.8, 1.6])
-    with selector_col:
-        selected_label = st.selectbox("Select a game", game_labels)
+    header_col, refresh_col = st.columns([5, 1.6])
+    with header_col:
+        st.markdown(
+            "<div style='font-size:40px; font-weight:800; letter-spacing:1px; "
+            "text-align:center; padding:4px 0 10px 0;'>MINUTES PLAYED TRACKER</div>",
+            unsafe_allow_html=True,
+        )
     with refresh_col:
         with st.container(key="refresh_box", border=True):
             if st.button("🔄 Refresh data now"):
@@ -212,37 +161,34 @@ with st.container(key="header_bar", border=True):
                 unsafe_allow_html=True,
             )
 
-selected_date = games.loc[games["label"] == selected_label, "session_date"].iloc[0]
+if data.empty:
+    st.warning("No MD match data found for 05/09/2026 onward yet.")
+    st.stop()
 
-# ---------------------------------------------------------------- filter + chart
-game_data = (
-    data[data["session_date"] == selected_date]
-    .sort_values("minutes", ascending=True)  # ascending so the longest bar plots at the top
-)
+# ---------------------------------------------------------------- build the longitudinal table
+def format_match_label(row):
+    opposition = row["match_opposition"] if pd.notna(row["match_opposition"]) else "Unknown"
+    loc_letter = str(row["match_location"])[:1].upper() if pd.notna(row["match_location"]) else "?"
+    competition = row["match_competition"] if pd.notna(row["match_competition"]) else "?"
+    return f"{opposition} - {loc_letter} - {competition}"
 
-fig = go.Figure()
-fig.add_bar(
-    x=game_data["minutes"],
-    y=game_data["player"],
-    orientation="h",
-    marker_color=GOLD,
-    text=[f"{m:.0f}" for m in game_data["minutes"]],
-    textposition="outside",
-    textfont=dict(color=NAVY, size=13, family=FONT),
-    hoverinfo="skip",
-)
-fig.update_layout(
-    height=max(400, len(game_data) * 32),
-    plot_bgcolor=WHITE,
-    paper_bgcolor=WHITE,
-    font=dict(family=FONT, color=NAVY),
-    xaxis=dict(title="Minutes Played", range=[0, 100], gridcolor="#e5e5e0"),
-    yaxis=dict(title=None),
-    margin=dict(l=10, r=40, t=20, b=40),
-)
+data["match_label"] = data.apply(format_match_label, axis=1)
 
-st.plotly_chart(
-    fig,
+matches_sorted = (
+    data[["session_date", "match_label"]]
+    .drop_duplicates()
+    .sort_values("session_date")
+)
+column_order = matches_sorted["match_label"].tolist()
+
+pivot = data.pivot_table(
+    index="player", columns="match_label", values="minutes", aggfunc="sum"
+)
+pivot = pivot.reindex(columns=column_order)
+pivot = pivot.sort_index()
+
+st.dataframe(
+    pivot.style.format(precision=0, na_rep="-"),
     width="stretch",
-    config={"displayModeBar": False},
+    height=min(800, 46 * (len(pivot) + 1)),
 )
