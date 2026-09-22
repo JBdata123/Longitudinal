@@ -101,17 +101,46 @@ def _to_minutes(t):
         return 0
 
 
+# ---------------------------------------------------------------- Firstbeat daily aggregation
+def aggregate_fb_daily(fb_df: pd.DataFrame) -> pd.DataFrame:
+    """Collapses multiple Firstbeat sessions on the same calendar date into a
+    single row per date: High-Intensity minutes are SUMMED across sessions
+    (time spent >90% HR Max genuinely adds up across two trainings in a day),
+    while Training Effect takes the day's highest session value, since TE is
+    a peak-stimulus score, not something that's meaningful to add together.
+    Returns columns: Date, _hi_mins, _te."""
+    cols = ["Date", "_hi_mins", "_te"]
+    if fb_df.empty:
+        return pd.DataFrame(columns=cols)
+    df = fb_df.copy()
+    df["_hi_mins"] = df["High intensity training (hh:mm:ss)"].apply(_to_minutes)
+    df["_te"] = df[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
+    grouped = df.groupby("Date", as_index=False).agg(
+        _hi_mins=("_hi_mins", "sum"),
+        _te=("_te", "max"),
+    )
+    return grouped[cols]
+
+
 # ---------------------------------------------------------------- Weekly summary helpers
+def _week_sort_key(w):
+    """Preseason weeks count down as time moves forward (-1, -2, -3...), then
+    the season proper counts up (1, 2, 3...). We want them displayed in that
+    exact playing order: -1, -2, -3, -4, -5, -6, 1, 2, ... rather than sorted
+    chronologically or numerically."""
+    return (0, abs(w)) if w < 0 else (1, w)
+
+
 def _weekly_grouped(gps_full_history: pd.DataFrame, week_col="Week Number", **agg_cols):
     """Groups full history by Week Number, sums the requested value column(s),
-    and orders weeks chronologically by each week's earliest date (not by the
-    raw week number, since preseason numbering counts down as time moves
-    forward: -1, -2, -3...)."""
+    and orders weeks -1, -2, -3, -4, -5, -6, 1, 2, ... (preseason countdown
+    first, then the season proper counting up), regardless of calendar order."""
     hist = gps_full_history.dropna(subset=[week_col]).copy()
     agg = {name: (col, "sum") for name, col in agg_cols.items()}
-    agg["first_date"] = ("Date", "min")
     grouped = hist.groupby(week_col).agg(**agg).reset_index()
-    return grouped.sort_values("first_date")
+    grouped["_sort_key"] = grouped[week_col].apply(_week_sort_key)
+    grouped = grouped.sort_values("_sort_key").drop(columns="_sort_key")
+    return grouped
 
 
 def _weekly_labels(grouped, week_col="Week Number"):
@@ -140,18 +169,17 @@ def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_valu
     )
     fig.update_layout(bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
-    
+
     max_y = max(y) if y else 1
     if bullet_marker is not None:
         max_y = max(max_y, bullet_marker)
-        
+
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
     fig.add_shape(
         type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
         line=dict(color=WHITE, width=1.5, dash="dot"),
     )
 
-    # Bullet marker reference line (Week Max)
     if bullet_marker is not None:
         fig.add_hline(
             y=bullet_marker,
@@ -203,7 +231,7 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
     )
     fig.update_layout(barmode="stack", bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
-    
+
     max_y = max(hsr_y[0], max((h + s for h, s in zip(hsr_y[1:], sd_y[1:])), default=0))
     if bullet_marker is not None:
         max_y = max(max_y, bullet_marker)
@@ -214,7 +242,6 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
         line=dict(color=WHITE, width=1.5, dash="dot"),
     )
 
-    # Bullet marker reference line (Week Max)
     if bullet_marker is not None:
         fig.add_hline(
             y=bullet_marker,
@@ -229,23 +256,98 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
     return fig
 
 
-def chart_weekly_hr_hi(fb_full_history: pd.DataFrame, avg_value=None, week_col="Week Number", bullet_marker=None) -> go.Figure:
-    """Weekly High Intensity HR (>90% Max) summary bar."""
-    hist = fb_full_history.dropna(subset=[week_col]).copy()
-    hist["_hi_mins"] = hist["High intensity training (hh:mm:ss)"].apply(_to_minutes)
-    
+def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, decel_col: str,
+                              avg_accel=None, avg_decel=None, week_col="Week Number",
+                              bullet_marker_accel=None, bullet_marker_decel=None) -> go.Figure:
+    """Weekly Accelerations + Decelerations, clustered side by side per week
+    (matching the daily accel/decel chart's green/red colouring), with a grey
+    Average pair on the left of the divider line. If avg_accel / avg_decel is
+    None, the average is computed live as the mean of the player's own weekly
+    totals so far."""
+    grouped = _weekly_grouped(gps_full_history, week_col, accel=accel_col, decel=decel_col)
+    week_labels = _weekly_labels(grouped, week_col)
+    accel_week = grouped["accel"].round(0)
+    decel_week = grouped["decel"].round(0)
+
+    if avg_accel is None:
+        avg_accel = accel_week.mean() if len(accel_week) else 0
+    if avg_decel is None:
+        avg_decel = decel_week.mean() if len(decel_week) else 0
+
+    x = ["Average"] + week_labels
+    accel_y = [avg_accel] + list(accel_week)
+    decel_y = [avg_decel] + list(decel_week)
+    accel_colors = [GREY] + [GREEN] * len(week_labels)
+    decel_colors = [GREY] + [RED] * len(week_labels)
+    accel_text = [bold(f"{v:.0f}") for v in accel_y]
+    decel_text = [bold(f"{v:.0f}") for v in decel_y]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=accel_y, marker_color=accel_colors, text=accel_text,
+        textposition="outside", cliponaxis=False,
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none", textangle=0, hoverinfo="skip", name="Accelerations",
+    )
+    fig.add_bar(
+        x=x, y=decel_y, marker_color=decel_colors, text=decel_text,
+        textposition="outside", cliponaxis=False,
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none", textangle=0, hoverinfo="skip", name="Decelerations",
+    )
+    fig.update_layout(barmode="group", bargap=_bargap_for(len(x)), bargroupgap=0)
+    fig = base_layout(fig, n_dates=len(x))
+
+    max_y = max(max(accel_y, default=0), max(decel_y, default=0)) or 1
+    if bullet_marker_accel is not None:
+        max_y = max(max_y, bullet_marker_accel)
+    if bullet_marker_decel is not None:
+        max_y = max(max_y, bullet_marker_decel)
+
+    fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
+    fig.add_shape(
+        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
+        line=dict(color=WHITE, width=1.5, dash="dot"),
+    )
+
+    if bullet_marker_accel is not None:
+        fig.add_hline(
+            y=bullet_marker_accel, line_dash="dash", line_color=GREEN, line_width=1.5,
+            annotation_text=bold(f"Accel Max: {bullet_marker_accel:.0f}"),
+            annotation_position="top right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
+    if bullet_marker_decel is not None:
+        fig.add_hline(
+            y=bullet_marker_decel, line_dash="dash", line_color=RED, line_width=1.5,
+            annotation_text=bold(f"Decel Max: {bullet_marker_decel:.0f}"),
+            annotation_position="bottom right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
+
+    return fig
+
+
+def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="Week Number", bullet_marker=None) -> go.Figure:
+    """Weekly High Intensity HR (>90% Max) summary bar. Expects fb_daily_full
+    to already be one row per calendar date (aggregate_fb_daily) with a
+    Week Number column merged in from the GPS calendar. Summing per week
+    correctly totals every session's HI minutes, including days with more
+    than one session, since aggregate_fb_daily already summed those per day
+    and the weekly groupby sums across all those days again."""
+    hist = fb_daily_full.dropna(subset=[week_col]).copy()
     grouped = _weekly_grouped(hist, week_col, total="_hi_mins")
     week_labels = _weekly_labels(grouped, week_col)
     week_values = grouped["total"].round(0)
-    
+
     if avg_value is None:
         avg_value = week_values.mean() if len(week_values) else 0
-        
+
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
     colors = [GREY] + [RED] * len(week_labels)
     text = [bold(f"{v:.0f}m") for v in y]
-    
+
     fig = go.Figure()
     fig.add_bar(
         x=x, y=y, marker_color=colors, text=text, textposition="outside",
@@ -254,11 +356,11 @@ def chart_weekly_hr_hi(fb_full_history: pd.DataFrame, avg_value=None, week_col="
     )
     fig.update_layout(bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
-    
+
     max_y = max(y) if y else 1
     if bullet_marker is not None:
         max_y = max(max_y, bullet_marker)
-        
+
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
     fig.add_shape(
         type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
@@ -430,14 +532,14 @@ def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
 
 # ---------------------------------------------------------------- Chart 5 (High Intensity Minutes - HR > 90% Max)
 def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
+    """Expects fb_player to be one row per calendar date (built from
+    aggregate_fb_daily then merged onto the full calendar), with columns
+    Date, Day, _hi_mins, _te - so multi-session days are already summed."""
     x = _x_labels(fb_player)
     bargap = _bargap_for(len(x))
 
-    def to_min(col):
-        return fb_player[col].apply(_to_minutes).round(1)
-
-    hi = to_min("High intensity training (hh:mm:ss)")
-    has_hi = fb_player["High intensity training (hh:mm:ss)"].notna()
+    hi = fb_player["_hi_mins"].fillna(0).round(1)
+    has_hi = fb_player["_hi_mins"].notna()
 
     fig = go.Figure()
     fig.add_bar(
@@ -456,8 +558,7 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
 
     fig.update_layout(bargap=bargap)
 
-    te_max = fb_player[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
-    te_vals = [round(v, 1) if pd.notna(v) else None for v in te_max]
+    te_vals = [round(v, 1) if pd.notna(v) else None for v in fb_player["_te"]]
 
     fig = base_layout(fig, n_dates=len(x))
     fig = _apply_value_row(
@@ -481,6 +582,5 @@ def legend_accel_decel(label_suffix):
 # ---------------------------------------------------------------- Weekly legends
 LEGEND_WEEKLY_TOTAL_DISTANCE = [(GREY, "Average"), (GOLD, "Weekly Total Distance")]
 LEGEND_WEEKLY_HSR_SD = [(GREY, "Average"), (GOLD, "HSR"), (RED, "Sprint Distance")]
-LEGEND_WEEKLY_ACCEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations")]
-LEGEND_WEEKLY_DECEL = [(GREY, "Average"), (RED, "Weekly Decelerations")]
+LEGEND_WEEKLY_ACCEL_DECEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations"), (RED, "Weekly Decelerations")]
 LEGEND_WEEKLY_HR_HI = [(GREY, "Average"), (RED, "Weekly High Intensity HR (>90%)")]
