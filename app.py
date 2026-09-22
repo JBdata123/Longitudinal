@@ -121,6 +121,11 @@ players = sorted(gps_day["Player Name"].dropna().unique())
 min_date = gps_day["Date"].min().date()
 max_date = gps_day["Date"].max().date()
 
+# Date -> Week Number map, built once from the GPS sheet (the only sheet that
+# carries week numbers) and reused to tag the Firstbeat data by date, since
+# week numbers are calendar-wide rather than specific to any one player.
+week_map = gps_day[["Date", "Week Number"]].drop_duplicates(subset="Date")
+
 # ---------------------------------------------------------------- header bar
 with st.container(key="header_bar", border=True):
     st.markdown(
@@ -168,8 +173,17 @@ if gps_player_all.empty:
 # build one row per CALENDAR date in the selected range
 full_calendar = pd.DataFrame({"Date": pd.date_range(start_date, end_date, freq="D")})
 gps_player_display = full_calendar.merge(gps_player_all, on="Date", how="left")
+
+# Firstbeat: collapse multiple sessions on the same date into one row (HI
+# minutes summed, TE taking the day's peak) BEFORE merging onto the
+# calendar, so a two-session day doesn't create duplicate calendar rows and
+# the daily HR chart shows one correctly-summed bar per date.
+fb_daily_full = charts.aggregate_fb_daily(fb_player_full).merge(week_map, on="Date", how="left")
+fb_daily_range = fb_daily_full[
+    (fb_daily_full["Date"].dt.date >= start_date) & (fb_daily_full["Date"].dt.date <= end_date)
+]
 fb_player_display = (
-    full_calendar.merge(fb_player_range, on="Date", how="left")
+    full_calendar.merge(fb_daily_range, on="Date", how="left")
     .merge(gps_player_display[["Date", "Day"]], on="Date", how="left")
 )
 
@@ -195,16 +209,16 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
 # ---------------------------------------------------------------- weekly summary configuration
 PLAYER_METRICS = {
     "olivia mcloughlin": {
-        "avg": {"total_distance": 30096, "hsr_sd": 712, "accel": 230, "decel": 222},
-        "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327},
+        "avg": {"total_distance": 30096, "hsr_sd": 712, "accel": 230, "decel": 222, "hr_hi": None},
+        "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327, "hr_hi": None},
     },
     "emma jansson": {
-        "avg": {"total_distance": 28300, "hsr_sd": 690 + 72, "accel": 290, "decel": 302},
-        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337},
+        "avg": {"total_distance": 28300, "hsr_sd": 690 + 72, "accel": 290, "decel": 302, "hr_hi": None},
+        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337, "hr_hi": None},
     },
     "celeste boureille": {
-        "avg": {"total_distance": 8414, "hsr_sd": 235 + 13, "accel": 79, "decel": 63},
-        "max": {"total_distance": 31848, "hsr_sd": 1036 + 189, "accel": 381, "decel": 276},
+        "avg": {"total_distance": 8414, "hsr_sd": 235 + 13, "accel": 79, "decel": 63, "hr_hi": None},
+        "max": {"total_distance": 31848, "hsr_sd": 1036 + 189, "accel": 381, "decel": 276, "hr_hi": None},
     },
 }
 
@@ -215,11 +229,13 @@ avg_total_distance = player_data["avg"].get("total_distance")
 avg_hsr_sd = player_data["avg"].get("hsr_sd")
 avg_accel = player_data["avg"].get("accel")
 avg_decel = player_data["avg"].get("decel")
+avg_hr_hi = player_data["avg"].get("hr_hi")
 
 max_total_distance = player_data["max"].get("total_distance")
 max_hsr_sd = player_data["max"].get("hsr_sd")
 max_accel = player_data["max"].get("accel")
 max_decel = player_data["max"].get("decel")
+max_hr_hi = player_data["max"].get("hr_hi")
 
 wk1, wk2, wk3, wk4 = st.columns(4)
 with wk1:
@@ -244,23 +260,25 @@ with wk2:
     )
 with wk3:
     render_panel(
-        "Weekly Accelerations",
-        charts.chart_weekly_single(
-            gps_player_full, "Acceleration B1-3 Total Efforts (Gen 2)", avg_accel, charts.GREEN,
-            bullet_marker=max_accel,
+        "Weekly Accelerations | Decelerations",
+        charts.chart_weekly_accel_decel(
+            gps_player_full,
+            "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+            avg_accel=avg_accel, avg_decel=avg_decel,
+            bullet_marker_accel=max_accel, bullet_marker_decel=max_decel,
         ),
-        key="chart_weekly_accel",
-        legend_items=charts.LEGEND_WEEKLY_ACCEL,
+        key="chart_weekly_accel_decel",
+        legend_items=charts.LEGEND_WEEKLY_ACCEL_DECEL,
     )
 with wk4:
     render_panel(
-        "Weekly Decelerations",
-        charts.chart_weekly_single(
-            gps_player_full, "Deceleration B1-3 Total Efforts (Gen 2)", avg_decel, charts.RED,
-            bullet_marker=max_decel,
+        "Weekly HR Minutes >90% Max",
+        charts.chart_weekly_hr_hi(
+            fb_daily_full, avg_hr_hi,
+            bullet_marker=max_hr_hi,
         ),
-        key="chart_weekly_decel",
-        legend_items=charts.LEGEND_WEEKLY_DECEL,
+        key="chart_weekly_hr_hi",
+        legend_items=charts.LEGEND_WEEKLY_HR_HI,
     )
 
 # ---------------------------------------------------------------- daily charts
