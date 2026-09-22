@@ -109,9 +109,12 @@ def aggregate_fb_daily(fb_df: pd.DataFrame) -> pd.DataFrame:
     while Training Effect takes the day's highest session value, since TE is
     a peak-stimulus score, not something that's meaningful to add together.
     Returns columns: Date, _hi_mins, _te."""
-    cols = ["Date", "_hi_mins", "_te"]
     if fb_df.empty:
-        return pd.DataFrame(columns=cols)
+        return pd.DataFrame({
+            "Date": pd.Series(dtype="datetime64[ns]"),
+            "_hi_mins": pd.Series(dtype="float64"),
+            "_te": pd.Series(dtype="float64"),
+        })
     df = fb_df.copy()
     df["_hi_mins"] = df["High intensity training (hh:mm:ss)"].apply(_to_minutes)
     df["_te"] = df[["Aerobic TE (0.0 - 5.0)", "Anaerobic TE (0.0 - 5.0)"]].max(axis=1)
@@ -119,8 +122,7 @@ def aggregate_fb_daily(fb_df: pd.DataFrame) -> pd.DataFrame:
         _hi_mins=("_hi_mins", "sum"),
         _te=("_te", "max"),
     )
-    return grouped[cols]
-
+    return grouped[["Date", "_hi_mins", "_te"]]
 
 # ---------------------------------------------------------------- Weekly summary helpers
 def _week_sort_key(w):
