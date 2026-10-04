@@ -8,6 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar, legend_row
 from data_loader import load_data, CACHE_TTL_SECONDS
 import charts
+st.write(charts.__file__, [n for n in dir(charts) if n.startswith(("chart_weekly", "player_", "aggregate"))])
 
 st.set_page_config(page_title="LCWFC Longitudinal Report", layout="wide")
 
