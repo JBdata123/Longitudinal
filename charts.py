@@ -65,9 +65,7 @@ def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float
     """For each date, counts calendar days since that metric last hit >=
     threshold (0 on the day it's hit, then 1, 2, 3... on every day after,
     including rest days, until it's hit again). Returns None for any date
-    before the metric has ever been hit in the player's known history, since
-    we can't truthfully claim a 'days since' figure without a real reference
-    point."""
+    before the metric has ever been hit in the player's known history."""
     s = full_history.set_index("Date")[col].sort_index()
     full_idx = pd.date_range(s.index.min(), s.index.max(), freq="D")
     s = s.reindex(full_idx)  # NaN on rest/no-session days
@@ -84,7 +82,7 @@ def _days_since_threshold(full_history: pd.DataFrame, col: str, threshold: float
 
 
 def _to_minutes(t):
-    """Helper to convert time representations (Timedelta, string, datetime.time) to minutes."""
+    """Converts time representations (Timedelta, string, datetime.time) to minutes."""
     if pd.isna(t):
         return 0
     if isinstance(t, pd.Timedelta):
@@ -104,10 +102,9 @@ def _to_minutes(t):
 # ---------------------------------------------------------------- Firstbeat daily aggregation
 def aggregate_fb_daily(fb_df: pd.DataFrame) -> pd.DataFrame:
     """Collapses multiple Firstbeat sessions on the same calendar date into a
-    single row per date: High-Intensity minutes are SUMMED across sessions
-    (time spent >90% HR Max genuinely adds up across two trainings in a day),
-    while Training Effect takes the day's highest session value, since TE is
-    a peak-stimulus score, not something that's meaningful to add together.
+    single row per date: High-Intensity minutes are SUMMED across sessions,
+    while Training Effect takes the day's highest session value (TE is a
+    peak-stimulus score, not additive).
     Returns columns: Date, _hi_mins, _te."""
     if fb_df.empty:
         return pd.DataFrame({
@@ -124,21 +121,18 @@ def aggregate_fb_daily(fb_df: pd.DataFrame) -> pd.DataFrame:
     )
     return grouped[["Date", "_hi_mins", "_te"]]
 
+
 # ---------------------------------------------------------------- Weekly summary helpers
 def _week_sort_key(w):
-    """Preseason weeks count down as time moves forward (-1, -2, -3...), then
-    the season proper counts up (1, 2, 3...). We want them displayed in that
-    exact playing order: -1, -2, -3, -4, -5, -6, 1, 2, ... rather than sorted
-    chronologically or numerically."""
+    """Display order: -1, -2, -3, -4, -5, -6, then 1, 2, 3 ..."""
     return (0, abs(w)) if w < 0 else (1, w)
 
 
-def _weekly_grouped(gps_full_history: pd.DataFrame, week_col="Week Number", **agg_cols):
-    """Groups full history by Week Number, sums the requested value column(s),
-    and orders weeks -1, -2, -3, -4, -5, -6, 1, 2, ... (preseason countdown
-    first, then the season proper counting up), regardless of calendar order."""
+def _weekly_grouped(gps_full_history: pd.DataFrame, week_col="Week Number", how="sum", **agg_cols):
+    """Groups full history by Week Number using `how` (sum by default, or max),
+    ordered -1, -2, -3, ... then 1, 2, 3, ... regardless of calendar order."""
     hist = gps_full_history.dropna(subset=[week_col]).copy()
-    agg = {name: (col, "sum") for name, col in agg_cols.items()}
+    agg = {name: (col, how) for name, col in agg_cols.items()}
     grouped = hist.groupby(week_col).agg(**agg).reset_index()
     grouped["_sort_key"] = grouped[week_col].apply(_week_sort_key)
     grouped = grouped.sort_values("_sort_key").drop(columns="_sort_key")
@@ -149,11 +143,17 @@ def _weekly_labels(grouped, week_col="Week Number"):
     return [f"Week {int(w)}" for w in grouped[week_col]]
 
 
+def _add_divider(fig):
+    fig.add_shape(
+        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
+        line=dict(color=WHITE, width=1.5, dash="dot"),
+    )
+
+
 def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_value, bar_color: str,
                          week_col="Week Number", fmt="{:.0f}", bullet_marker=None) -> go.Figure:
     """Weekly summary bar: [Average (grey)] | divider | [Week -1] [Week -2] ...
-    If avg_value is None, the average is computed live as the mean of this
-    player's own weekly totals so far, rather than a fixed hardcoded value."""
+    If avg_value is None, the average is the mean of the player's weekly totals."""
     grouped = _weekly_grouped(gps_full_history, week_col, total=value_col)
     week_labels = _weekly_labels(grouped, week_col)
     week_values = grouped["total"].round(0)
@@ -177,30 +177,21 @@ def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_valu
         max_y = max(max_y, bullet_marker)
 
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
-    fig.add_shape(
-        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
-        line=dict(color=WHITE, width=1.5, dash="dot"),
-    )
+    _add_divider(fig)
 
     if bullet_marker is not None:
         fig.add_hline(
-            y=bullet_marker,
-            line_dash="dash",
-            line_color="rgba(255, 255, 255, 0.85)",
-            line_width=1.5,
-            annotation_text=bold(f"Max: {bullet_marker:.0f}"),
+            y=bullet_marker, line_dash="dash", line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5, annotation_text=bold(f"Max: {bullet_marker:.0f}"),
             annotation_position="top right",
             annotation_font=dict(family=FONT, size=11, color=WHITE),
         )
-
     return fig
 
 
 def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number", bullet_marker=None) -> go.Figure:
-    """Weekly HSR+SD stacked summary: [Average (grey, single block)] | divider |
-    [Week -1 (gold HSR + red SD stacked)] [Week -2] ...
-    If avg_value is None, the average is computed live as the mean of this
-    player's own weekly (HSR+SD) totals so far, rather than a fixed value."""
+    """Weekly HSR+SD stacked summary: [Average (grey)] | divider |
+    [Week -1 (gold HSR + red SD stacked)] ..."""
     hist = gps_full_history.dropna(subset=[week_col]).copy()
     hist["_hsr"] = hist["Velocity Band 4 Total Distance"].fillna(0) + hist["Velocity Band 5 Total Distance"].fillna(0)
     hist["_sd"] = hist["SD"].fillna(0)
@@ -239,33 +230,26 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
         max_y = max(max_y, bullet_marker)
 
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
-    fig.add_shape(
-        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
-        line=dict(color=WHITE, width=1.5, dash="dot"),
-    )
+    _add_divider(fig)
 
     if bullet_marker is not None:
         fig.add_hline(
-            y=bullet_marker,
-            line_dash="dash",
-            line_color="rgba(255, 255, 255, 0.85)",
-            line_width=1.5,
-            annotation_text=bold(f"Max: {bullet_marker:.0f}"),
+            y=bullet_marker, line_dash="dash", line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5, annotation_text=bold(f"Max: {bullet_marker:.0f}"),
             annotation_position="top right",
             annotation_font=dict(family=FONT, size=11, color=WHITE),
         )
-
     return fig
 
 
 def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, decel_col: str,
                               avg_accel=None, avg_decel=None, week_col="Week Number",
-                              bullet_marker_accel=None, bullet_marker_decel=None) -> go.Figure:
-    """Weekly Accelerations + Decelerations, clustered side by side per week
-    (matching the daily accel/decel chart's green/red colouring), with a grey
-    Average pair on the left of the divider line. If avg_accel / avg_decel is
-    None, the average is computed live as the mean of the player's own weekly
-    totals so far."""
+                              bullet_marker_accel=None, bullet_marker_decel=None,
+                              auto_max=False) -> go.Figure:
+    """Weekly Accelerations + Decelerations clustered per week (green/red), with
+    a grey Average pair left of the divider. If avg_* is None the average is the
+    mean of the player's weekly totals. If auto_max is True and no max is given,
+    the max line is the player's highest recorded week."""
     grouped = _weekly_grouped(gps_full_history, week_col, accel=accel_col, decel=decel_col)
     week_labels = _weekly_labels(grouped, week_col)
     accel_week = grouped["accel"].round(0)
@@ -275,6 +259,12 @@ def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, dec
         avg_accel = accel_week.mean() if len(accel_week) else 0
     if avg_decel is None:
         avg_decel = decel_week.mean() if len(decel_week) else 0
+
+    if auto_max:
+        if bullet_marker_accel is None and len(accel_week):
+            bullet_marker_accel = accel_week.max()
+        if bullet_marker_decel is None and len(decel_week):
+            bullet_marker_decel = decel_week.max()
 
     x = ["Average"] + week_labels
     accel_y = [avg_accel] + list(accel_week)
@@ -307,10 +297,7 @@ def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, dec
         max_y = max(max_y, bullet_marker_decel)
 
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
-    fig.add_shape(
-        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
-        line=dict(color=WHITE, width=1.5, dash="dot"),
-    )
+    _add_divider(fig)
 
     if bullet_marker_accel is not None:
         fig.add_hline(
@@ -326,17 +313,13 @@ def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, dec
             annotation_position="bottom right",
             annotation_font=dict(family=FONT, size=11, color=WHITE),
         )
-
     return fig
 
 
 def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="Week Number", bullet_marker=None) -> go.Figure:
-    """Weekly High Intensity HR (>90% Max) summary bar. Expects fb_daily_full
-    to already be one row per calendar date (aggregate_fb_daily) with a
-    Week Number column merged in from the GPS calendar. Summing per week
-    correctly totals every session's HI minutes, including days with more
-    than one session, since aggregate_fb_daily already summed those per day
-    and the weekly groupby sums across all those days again."""
+    """Weekly minutes above 90% HR Max. Expects one row per date (from
+    aggregate_fb_daily) with a Week Number column merged in. Multi-session days
+    are summed per day, then all days summed per week."""
     hist = fb_daily_full.dropna(subset=[week_col]).copy()
     grouped = _weekly_grouped(hist, week_col, total="_hi_mins")
     week_labels = _weekly_labels(grouped, week_col)
@@ -364,22 +347,71 @@ def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="We
         max_y = max(max_y, bullet_marker)
 
     fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
-    fig.add_shape(
-        type="line", x0=0.5, x1=0.5, xref="x", y0=0, y1=1, yref="paper",
-        line=dict(color=WHITE, width=1.5, dash="dot"),
-    )
+    _add_divider(fig)
 
     if bullet_marker is not None:
         fig.add_hline(
-            y=bullet_marker,
-            line_dash="dash",
-            line_color="rgba(255, 255, 255, 0.85)",
-            line_width=1.5,
-            annotation_text=bold(f"Max: {bullet_marker:.0f}m"),
+            y=bullet_marker, line_dash="dash", line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5, annotation_text=bold(f"Max: {bullet_marker:.0f}m"),
             annotation_position="top right",
             annotation_font=dict(family=FONT, size=11, color=WHITE),
         )
+    return fig
 
+
+def player_max_velocity(gps_full_history: pd.DataFrame):
+    """A player's true top speed, derived from Max Vel (% Max): if they hit
+    7.0 and that was 91% of their max, their max is 7.0 / 0.91. Uses the
+    session with the highest % (least rounding error). Falls back to the
+    highest recorded velocity if no % data exists."""
+    v = pd.to_numeric(gps_full_history["Maximum Velocity"], errors="coerce")
+    p = pd.to_numeric(gps_full_history["Max Vel (% Max)"], errors="coerce")
+    valid = (v > 0) & (p > 0)
+    if valid.any():
+        idx = p[valid].idxmax()
+        return float(v.loc[idx] * 100 / p.loc[idx])
+    return float(v.max()) if v.notna().any() else None
+
+
+def chart_weekly_max_velocity(gps_full_history: pd.DataFrame, avg_value=None,
+                               week_col="Week Number", bullet_marker=None) -> go.Figure:
+    """Highest max velocity reached in each week, with a grey Average bar
+    (mean of the weekly highs) and a dashed line at the player's true max."""
+    grouped = _weekly_grouped(gps_full_history, week_col, how="max", top="Maximum Velocity")
+    week_labels = _weekly_labels(grouped, week_col)
+    week_values = grouped["top"].round(1)
+
+    if avg_value is None:
+        avg_value = round(week_values.mean(), 1) if len(week_values) else 0
+
+    x = ["Average"] + week_labels
+    y = [avg_value] + list(week_values)
+    colors = [GREY] + [GOLD] * len(week_labels)
+    text = [bold(f"{v:.1f}") for v in y]
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=y, marker_color=colors, text=text, textposition="outside",
+        textfont=dict(color=WHITE, size=VALUE_FONT_SIZE, family=FONT),
+        constraintext="none", cliponaxis=False, textangle=0, hoverinfo="skip",
+    )
+    fig.update_layout(bargap=_bargap_for(len(x)))
+    fig = base_layout(fig, n_dates=len(x))
+
+    max_y = max(y) if y else 1
+    if bullet_marker is not None:
+        max_y = max(max_y, bullet_marker)
+
+    fig.update_layout(yaxis=dict(visible=False, range=[0, max_y / 0.75]))
+    _add_divider(fig)
+
+    if bullet_marker is not None:
+        fig.add_hline(
+            y=bullet_marker, line_dash="dash", line_color="rgba(255, 255, 255, 0.85)",
+            line_width=1.5, annotation_text=bold(f"Max: {bullet_marker:.1f}"),
+            annotation_position="top right",
+            annotation_font=dict(family=FONT, size=11, color=WHITE),
+        )
     return fig
 
 
@@ -545,19 +577,12 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
 
     fig = go.Figure()
     fig.add_bar(
-        x=x,
-        y=hi,
-        marker_color=RED,
+        x=x, y=hi, marker_color=RED,
         text=_bold_labels_masked(hi, has_hi, "{:.0f}m"),
-        textposition="outside",
-        cliponaxis=False,
+        textposition="outside", cliponaxis=False,
         textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
-        constraintext="none",
-        textangle=0,
-        hoverinfo="skip",
-        name=">90% HR Max",
+        constraintext="none", textangle=0, hoverinfo="skip", name=">90% HR Max",
     )
-
     fig.update_layout(bargap=bargap)
 
     te_vals = [round(v, 1) if pd.notna(v) else None for v in fb_player["_te"]]
@@ -566,7 +591,6 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
     fig = _apply_value_row(
         fig, x, te_vals, hi.max() if len(hi) else 0, fmt="{:.1f}", color_fn=te_box_color
     )
-
     return fig
 
 
@@ -586,3 +610,4 @@ LEGEND_WEEKLY_TOTAL_DISTANCE = [(GREY, "Average"), (GOLD, "Weekly Total Distance
 LEGEND_WEEKLY_HSR_SD = [(GREY, "Average"), (GOLD, "HSR"), (RED, "Sprint Distance")]
 LEGEND_WEEKLY_ACCEL_DECEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations"), (RED, "Weekly Decelerations")]
 LEGEND_WEEKLY_HR_HI = [(GREY, "Average"), (RED, "Weekly High Intensity HR (>90%)")]
+LEGEND_WEEKLY_MAX_VEL = [(GREY, "Average"), (GOLD, "Weekly Max Velocity")]
