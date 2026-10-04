@@ -227,12 +227,16 @@ avg_hsr_sd = player_data["avg"].get("hsr_sd")
 avg_accel = player_data["avg"].get("accel")
 avg_decel = player_data["avg"].get("decel")
 avg_hr_hi = player_data["avg"].get("hr_hi")
+avg_accel_hi = player_data["avg"].get("accel_hi")
+avg_decel_hi = player_data["avg"].get("decel_hi")
 
 max_total_distance = player_data["max"].get("total_distance")
 max_hsr_sd = player_data["max"].get("hsr_sd")
 max_accel = player_data["max"].get("accel")
 max_decel = player_data["max"].get("decel")
 max_hr_hi = player_data["max"].get("hr_hi")
+max_accel_hi = player_data["max"].get("accel_hi")
+max_decel_hi = player_data["max"].get("decel_hi")
 
 wk1, wk2, wk3, wk4 = st.columns(4)
 with wk1:
@@ -288,7 +292,8 @@ with wk5:
         charts.chart_weekly_accel_decel(
             gps_player_full,
             "Acceleration B2-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
-            auto_max=True,
+            avg_accel=avg_accel_hi, avg_decel=avg_decel_hi,
+            bullet_marker_accel=max_accel_hi, bullet_marker_decel=max_decel_hi,
         ),
         key="chart_weekly_accel_decel_23",
         legend_items=charts.LEGEND_WEEKLY_ACCEL_DECEL,
