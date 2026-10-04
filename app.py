@@ -206,16 +206,16 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
 # ---------------------------------------------------------------- weekly summary configuration
 PLAYER_METRICS = {
     "olivia mcloughlin": {
-        "avg": {"total_distance": 30096, "hsr_sd": 712, "accel": 230, "decel": 222, "hr_hi": None},
-        "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327, "hr_hi": None},
+        "avg": {"total_distance": 32996, "hsr_sd": 778, "accel": 271, "decel": 279, "hr_hi": None, "accel_hi": 33, "decel_hi": 47},
+        "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327, "hr_hi": None, "accel_hi": 57, "decel_hi": 73},
     },
     "emma jansson": {
-        "avg": {"total_distance": 28300, "hsr_sd": 690 + 72, "accel": 290, "decel": 302, "hr_hi": None},
-        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337, "hr_hi": None},
+        "avg": {"total_distance": 29812, "hsr_sd": 690 + 72, "accel": 290, "decel": 302, "hr_hi": None, "accel_hi": 45, "decel_hi": 48},
+        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337, "hr_hi": None, "accel_hi": 67, "decel_hi": 71},
     },
     "celeste boureille": {
-        "avg": {"total_distance": 8414, "hsr_sd": 235 + 13, "accel": 79, "decel": 63, "hr_hi": None},
-        "max": {"total_distance": 31848, "hsr_sd": 1036 + 189, "accel": 381, "decel": 276, "hr_hi": None},
+        "avg": {"total_distance": 28309, "hsr_sd": 721, "accel": 282, "decel": 242, "hr_hi": None, "accel_hi": 39, "decel_hi": 45},
+        "max": {"total_distance": 31848, "hsr_sd": 1036 + 189, "accel": 381, "decel": 276, "hr_hi": None, "accel_hi": 62, "decel_hi": 71},
     },
 }
 
