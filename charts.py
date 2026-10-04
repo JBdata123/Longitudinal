@@ -159,6 +159,8 @@ def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_valu
     week_values = grouped["total"].round(0)
     if avg_value is None:
         avg_value = week_values.mean() if len(week_values) else 0
+    if bullet_marker is None and len(week_values):
+        bullet_marker = week_values.max()  # no manual max -> best week so far
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
     colors = [GREY] + [bar_color] * len(week_labels)
@@ -199,9 +201,11 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
     week_labels = _weekly_labels(grouped, week_col)
     hsr_week = grouped["hsr"].round(0)
     sd_week = grouped["sd"].round(0)
+    combo_week = hsr_week + sd_week
     if avg_value is None:
-        combo_week = hsr_week + sd_week
         avg_value = combo_week.mean() if len(combo_week) else 0
+    if bullet_marker is None and len(combo_week):
+        bullet_marker = combo_week.max()  # no manual max -> best week so far
     x = ["Average"] + week_labels
     hsr_y = [avg_value] + list(hsr_week)
     sd_y = [0] + list(sd_week)
@@ -245,7 +249,7 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
 def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, decel_col: str,
                               avg_accel=None, avg_decel=None, week_col="Week Number",
                               bullet_marker_accel=None, bullet_marker_decel=None,
-                              auto_max=False) -> go.Figure:
+                              auto_max=True) -> go.Figure:
     """Weekly Accelerations + Decelerations clustered per week (green/red), with
     a grey Average pair left of the divider. If avg_* is None the average is the
     mean of the player's weekly totals. If auto_max is True and no max is given,
@@ -327,6 +331,8 @@ def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="We
 
     if avg_value is None:
         avg_value = week_values.mean() if len(week_values) else 0
+    if bullet_marker is None and len(week_values):
+        bullet_marker = week_values.max()  # no manual max -> best week so far
 
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
