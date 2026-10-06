@@ -212,13 +212,21 @@ column_order = match_columns + ["Total"]
 pivot = pivot.reindex(columns=column_order)
 pivot = pivot.sort_index()
 
-# Color coding function based on minutes ranges
+# Colour bands (minutes). Edit these two numbers to change the cut-offs.
+GREEN_FROM = 75    # 75 or more        -> green
+YELLOW_FROM = 45   # 45 up to 74       -> yellow   (anything lower -> red)
+
 def color_minutes(val):
+    """Colour is decided from the SAME rounded number the table displays,
+    so what you read is always what was coloured. (Previously the unrounded
+    value was used and the rules had a gap between 74 and 75, so a cell
+    showing 75 could be red.) Every value now falls into exactly one band."""
     if pd.isna(val):
         return ""
-    if val > 75:
+    shown = int(f"{val:.0f}")   # identical rounding to the displayed value
+    if shown >= GREEN_FROM:
         return "background-color: #2e7d32; color: #ffffff; font-weight: bold;"
-    elif 45 <= val <= 74:
+    elif shown >= YELLOW_FROM:
         return "background-color: #fdbe11; color: #0a192f; font-weight: bold;"
     else:
         return "background-color: #d32f2f; color: #ffffff; font-weight: bold;"
