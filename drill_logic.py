@@ -14,14 +14,14 @@ import re
 
 import pandas as pd
 
-# (column key, label, unit)
+# (column key, label, unit) -- the six measures shown for every drill
 METRICS = [
-    ("distance", "Distance", "m"),
-    ("hsr", "HSR", "m"),
-    ("sprint", "Sprint", "m"),
-    ("accel", "Accels", ""),
-    ("decel", "Decels", ""),
-    ("explosive", "Explosive efforts", ""),
+    ("distance", "Total distance", "m"),
+    ("hsr", "HSR (bands 4+5)", "m"),
+    ("sprint", "Sprint distance", "m"),
+    ("accel", "Accelerations 1-3", ""),
+    ("decel", "Decelerations 1-3", ""),
+    ("hr90", "Minutes above 90% HR", "min"),
 ]
 
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
@@ -86,6 +86,21 @@ def guess_drill_type(label, avg_players_per_session):
     return "Team drill"
 
 
+def parse_minutes_or_nan(duration_text):
+    """Like parse_minutes, but a missing value stays missing (NaN) instead of
+    becoming 0. Needed for heart rate: 'no Firstbeat data for this drill' is
+    not the same as '0 minutes above 90%'."""
+    if duration_text is None or (isinstance(duration_text, float) and pd.isna(duration_text)):
+        return float("nan")
+    text = str(duration_text).strip()
+    if len(text) < 8:
+        return float("nan")
+    try:
+        return int(text[0:2]) * 60 + int(text[3:5]) + int(text[6:8]) / 60
+    except ValueError:
+        return float("nan")
+
+
 def prepare_rows(df):
     """Adds the numeric columns the library needs to the raw master_data rows."""
     d = df.copy()
@@ -96,7 +111,10 @@ def prepare_rows(df):
     d["sprint"] = num("gps_sd")
     d["accel"] = num("gps_acceleration_b1_3_total_efforts_gen_2")
     d["decel"] = num("gps_deceleration_b1_3_total_efforts_gen_2")
-    d["explosive"] = num("gps_velocity_band_5_total_effort_count") + num("gps_velocity_band_6_total_effort_count")
+    if "fb_high_intensity_training_hh_mm_ss" in d:
+        d["hr90"] = d["fb_high_intensity_training_hh_mm_ss"].apply(parse_minutes_or_nan)
+    else:
+        d["hr90"] = float("nan")
     d["position"] = d["position"].fillna("Unknown").replace("", "Unknown")
     return d
 
@@ -144,19 +162,30 @@ def suggest_groups(rows, linked_aliases):
 
 def per_minute_by_position(df):
     """One row per position group plus 'All outfield'. Output per minute is
-    total / total minutes, with the players and sessions behind it."""
+    total / total minutes, with the players and sessions behind it.
+
+    Heart rate is worked out only from rows that actually have Firstbeat
+    data (and only against the minutes of those same rows), so a player with
+    no heart rate recorded can't drag the figure down. If nobody has any,
+    it's NaN -- shown as n/a, never as 0."""
     keys = [k for k, _, _ in METRICS]
-    cols = ["Position", "Players", "Sessions", "Minutes"] + keys
+    cols = ["Position", "Players", "Sessions", "Minutes", "HR players"] + keys
     d = df[df["minutes"] > 0]
     if d.empty:
         return pd.DataFrame(columns=cols)
 
     def build(label, g):
         mins = g["minutes"].sum()
+        with_hr = g[g["hr90"].notna()]
         row = {"Position": label, "Players": g["player"].nunique(),
-               "Sessions": g["session_date"].nunique(), "Minutes": mins}
+               "Sessions": g["session_date"].nunique(), "Minutes": mins,
+               "HR players": with_hr["player"].nunique()}
         for k in keys:
-            row[k] = g[k].sum() / mins
+            if k == "hr90":
+                hr_minutes = with_hr["minutes"].sum()
+                row[k] = with_hr["hr90"].sum() / hr_minutes if hr_minutes > 0 else float("nan")
+            else:
+                row[k] = g[k].sum() / mins
         return row
 
     rows = [build("All outfield", d)]
