@@ -55,7 +55,7 @@ def normalise_drill_key(label):
     'WALKTHROUGH'. Genuine wording differences (THROUGH vs WITH, SET PLAYS vs
     SET PIECES) are deliberately NOT merged -- those need a human."""
     text = str(label or "").upper().strip()
-    text = re.sub(r"^B\d+\s*-\s*", "", text)
+    text = re.sub(r"^B\d+(\s*-\s*|\s+)", "", text)      # "B1 - 5V3 ..." and "B4 3V2"
     text = re.sub(r"\s+BLOCK\s+\d+$", "", text)
     return re.sub(r"[^A-Z0-9+]", "", text)
 
@@ -63,7 +63,7 @@ def normalise_drill_key(label):
 def clean_display_name(label):
     """Same clean-up as the key, but keeps the readable text."""
     text = str(label or "").strip()
-    text = re.sub(r"^B\d+\s*-\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"^B\d+(\s*-\s*|\s+)", "", text, flags=re.IGNORECASE)
     return re.sub(r"\s+BLOCK\s+\d+$", "", text, flags=re.IGNORECASE).strip()
 
 
