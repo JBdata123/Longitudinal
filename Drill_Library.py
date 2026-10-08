@@ -28,7 +28,6 @@ st.markdown(f"""
 <style>
     .stApp {{ background-color: {WHITE}; }}
     #MainMenu, footer {{visibility: hidden;}}
-    div.block-container {{ padding-top: 0rem; }}
     h1, h2, h3 {{ color: {NAVY}; }}
 </style>
 """, unsafe_allow_html=True)
@@ -125,8 +124,21 @@ def chip(text):
             f"padding:3px 10px;margin:0 6px 6px 0;font-size:13px'>{escape(text)}</span>")
 
 
-def fmt_metric(key, value):
-    return f"{value:,.0f}" if key == "distance" else f"{value:,.1f}"
+def fmt_metric(key, value, per_minute=True):
+    """n/a when there is no value (e.g. no heart rate recorded), never a
+    misleading 0. Per-minute rates keep a decimal; projected totals are
+    whole numbers, except minutes above 90% HR."""
+    if value is None or pd.isna(value):
+        return "n/a"
+    if key == "hr90":
+        return f"{value:,.2f}" if per_minute else f"{value:,.1f}"
+    if per_minute:
+        return f"{value:,.0f}" if key == "distance" else f"{value:,.1f}"
+    return f"{value:,.0f}"
+
+
+def unit_for(key, unit, per_minute):
+    return "" if (key == "hr90" and per_minute) else unit
 
 
 def note_box(kind, text):
@@ -199,14 +211,22 @@ def show_library():
         st.warning(dl.thin_message(players, sessions))
     else:
         st.caption(f"Based on {players} players across {sessions} sessions, {row['Minutes']:,.0f} player-minutes.")
-    tile_row([tile(f"{label} per min", fmt_metric(k, row[k]), unit) for k, label, unit in dl.METRICS])
+    tile_row([tile(f"{label} per min", fmt_metric(k, row[k]), unit_for(k, unit, True)) for k, label, unit in dl.METRICS])
+    if pd.isna(row["hr90"]):
+        st.caption("No heart rate found for this drill. Firstbeat has to record it under the same drill "
+                   "name as the GPS for it to link up.")
+    else:
+        st.caption(f"Minutes above 90% HR per min of {row['hr90']:.2f} means about {row['hr90'] * 100:.0f}% of "
+                   f"the drill was spent above 90% of max HR. Heart rate recorded for "
+                   f"{int(row['HR players'])} of {players} players.")
 
     with st.expander("All positions"):
         table = summary.copy()
         table["Minutes"] = table["Minutes"].round(0)
         table["Note"] = ["Thin" if dl.is_thin(int(p), int(s)) else "" for p, s in zip(table["Players"], table["Sessions"])]
         for k, label, unit in dl.METRICS:
-            table[label + (f" ({unit})" if unit else "") + " / min"] = table[k].round(0 if k == "distance" else 1)
+            decimals = 0 if k == "distance" else (2 if k == "hr90" else 1)
+            table[label + (f" ({unit})" if unit else "") + " / min"] = table[k].round(decimals)
         st.dataframe(table.drop(columns=[k for k, _, _ in dl.METRICS]), width="stretch", hide_index=True)
 
     st.markdown("### If we run this drill for...")
@@ -214,7 +234,8 @@ def show_library():
     minutes = st.number_input("Minutes", min_value=1.0, max_value=120.0, value=default_minutes,
                               step=1.0, key=f"mins_{drill_id}")
     projected = dl.project(row, minutes)
-    tile_row([tile(label, fmt_metric(k, projected[k]), unit) for k, label, unit in dl.METRICS])
+    tile_row([tile(label, fmt_metric(k, projected[k], per_minute=False), unit_for(k, unit, False))
+              for k, label, unit in dl.METRICS])
     note_box(*dl.projection_note(minutes, dl.observed_block_minutes(data)))
     st.caption(f"Per player, for the {position.lower()} group. Assumes the per-minute rate holds for the whole time.")
 
