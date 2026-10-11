@@ -32,6 +32,42 @@ TRAINING_ROWS_SQL = """
 
 _DRILL_NUMERIC = ["pitch_length_m", "pitch_width_m", "num_players", "planned_minutes"]
 
+# The tables the library needs. Safe to run any number of times: it creates
+# what's missing and leaves everything else (including saved drills) alone.
+# Also available as migration_add_drill_library.sql, but the page runs this
+# itself the first time it loads, so nothing has to be done in Supabase.
+SCHEMA_SQL = """
+create table if not exists drills (
+    drill_id        serial primary key,
+    name            text    not null unique,
+    drill_type      text    not null default 'Team drill',
+    pitch_length_m  numeric,
+    pitch_width_m   numeric,
+    num_players     integer,
+    planned_minutes numeric,
+    notes           text,
+    tags            text[]  not null default '{}',
+    photo           bytea,
+    photo_mime      text,
+    created_at      timestamptz not null default now(),
+    updated_at      timestamptz not null default now()
+);
+alter table drills add column if not exists tags text[] not null default '{}';
+create table if not exists drill_aliases (
+    alias    text    primary key,
+    drill_id integer not null references drills(drill_id) on delete cascade
+);
+create index if not exists drill_aliases_drill_id_idx on drill_aliases (drill_id);
+"""
+
+
+def ensure_schema(conn):
+    """Create the drill library tables if they don't exist, and add any
+    column added since the first version (tags). Never touches saved data."""
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(SCHEMA_SQL)
+
 
 def connect():
     import streamlit as st
@@ -54,13 +90,14 @@ def fetch_drills(conn):
     with conn.cursor() as cur:
         cur.execute("""
             select drill_id, name, drill_type, pitch_length_m, pitch_width_m,
-                   num_players, planned_minutes, notes,
+                   num_players, planned_minutes, notes, tags,
                    (photo is not null) as has_photo, updated_at
             from drills order by name
         """)
         df = _frame(cur)
     for col in _DRILL_NUMERIC:
         df[col] = pd.to_numeric(df[col], errors="coerce")   # Decimal -> float
+    df["tags"] = df["tags"].apply(lambda t: list(t) if t else [])
     return df
 
 
@@ -126,6 +163,7 @@ def save_drill(conn, drill_id, fields, aliases, photo=None, photo_mime=None, rem
         None if _none_if_blank(fields.get("num_players")) is None else int(fields["num_players"]),
         _none_if_blank(fields.get("planned_minutes")),
         (fields.get("notes") or "").strip() or None,
+        list(dict.fromkeys(t.strip() for t in (fields.get("tags") or []) if t and t.strip())),
     )
     try:
         with conn:                                   # one transaction: commit or roll back together
@@ -140,15 +178,15 @@ def save_drill(conn, drill_id, fields, aliases, photo=None, photo_mime=None, rem
                 if drill_id is None:
                     cur.execute("""
                         insert into drills (name, drill_type, pitch_length_m, pitch_width_m,
-                                            num_players, planned_minutes, notes)
-                        values (%s,%s,%s,%s,%s,%s,%s) returning drill_id
+                                            num_players, planned_minutes, notes, tags)
+                        values (%s,%s,%s,%s,%s,%s,%s,%s) returning drill_id
                     """, values)
                     drill_id = cur.fetchone()[0]
                 else:
                     cur.execute("""
                         update drills set name=%s, drill_type=%s, pitch_length_m=%s,
                                pitch_width_m=%s, num_players=%s, planned_minutes=%s,
-                               notes=%s, updated_at=now()
+                               notes=%s, tags=%s, updated_at=now()
                         where drill_id=%s
                     """, values + (int(drill_id),))
                 if photo is not None:
