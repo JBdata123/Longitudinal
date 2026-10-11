@@ -32,6 +32,18 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------------------------------------------------------- are all three files the same version?
+LIBRARY_VERSION = 3          # keep in step with drill_logic.py and drill_db.py
+
+_out_of_date = [name for name, module in (("drill_logic.py", dl), ("drill_db.py", drill_db))
+                if getattr(module, "LIBRARY_VERSION", None) != LIBRARY_VERSION]
+if _out_of_date:
+    st.error("The Drill Library files in your GitHub repo don't match each other. "
+             f"Out of date: {', '.join(_out_of_date)}.")
+    st.info("Upload the latest version of all three files together (Drill_Library.py, drill_logic.py and "
+            "drill_db.py), replacing the old ones. Then open Manage app and choose Reboot app.")
+    st.stop()
+
 
 # ---------------------------------------------------------------- data
 @st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Loading drill data...")
