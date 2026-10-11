@@ -33,7 +33,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------- are all three files the same version?
-LIBRARY_VERSION = 3          # keep in step with drill_logic.py and drill_db.py
+LIBRARY_VERSION = 4          # keep in step with drill_logic.py and drill_db.py
 
 _out_of_date = [name for name, module in (("drill_logic.py", dl), ("drill_db.py", drill_db))
                 if getattr(module, "LIBRARY_VERSION", None) != LIBRARY_VERSION]
@@ -287,18 +287,31 @@ def show_finder():
     if drills.empty:
         st.info("No drills saved yet, so there is nothing to search. Add some first.")
         return
-    st.markdown("Pick a measure and a target, and it ranks your saved drills by how close each would get "
-                "if you ran it for the minutes you have, using what players actually produced in it.")
+    st.markdown("Pick one or more measures and a target for each, and it ranks your saved drills by how close each "
+                "would get if you ran it for the minutes you have, using what players actually produced in it.")
 
     by_label = {label: (key, unit) for key, label, unit in dl.METRICS}
-    c1, c2, c3 = st.columns(3)
-    label = c1.selectbox("Measure", list(by_label))
-    key, unit = by_label[label]
-    default_target, step = FINDER_DEFAULTS[key]
-    target_label = "Target (minutes above 90% HR)" if key == "hr90" else (f"Target ({unit})" if unit else "Target (count)")
-    target = c2.number_input(target_label, min_value=0.1, value=default_target, step=step,
-                             key=f"finder_target_{key}", format="%.1f")
-    minutes = c3.number_input("Minutes available", min_value=1.0, max_value=120.0, value=10.0, step=1.0)
+    c1, c2 = st.columns([2, 1])
+    chosen = c1.multiselect("Measures", list(by_label), default=["Total distance"],
+                            help="Pick more than one to filter by several at once. A drill only counts as a match "
+                                 "if every chosen measure is close to its target.")
+    minutes = c2.number_input("Minutes available", min_value=1.0, max_value=120.0, value=10.0, step=1.0)
+    if not chosen:
+        st.info("Pick at least one measure.")
+        return
+
+    targets = {}
+    target_cols = st.columns(min(len(chosen), 3))
+    for n, label in enumerate(chosen):
+        key, unit = by_label[label]
+        default_target, step = FINDER_DEFAULTS[key]
+        if key == "hr90":
+            target_label = "Target (minutes above 90% HR)" if len(chosen) == 1 else f"{label} target (minutes)"
+        else:
+            what = unit if unit else "count"
+            target_label = f"Target ({what})" if len(chosen) == 1 else f"{label} target ({what})"
+        targets[key] = target_cols[n % len(target_cols)].number_input(
+            target_label, min_value=0.1, value=default_target, step=step, key=f"finder_target_{key}", format="%.1f")
 
     c4, c5, c6 = st.columns(3)
     positions = ["All outfield"] + sorted(p for p in rows["position"].dropna().unique())
@@ -309,31 +322,58 @@ def show_finder():
     fit = st.checkbox("Fit players only", value=True,
                       help="Leaves out players recorded as injured, modified or international on the day.")
 
-    result = dl.rank_drills(rows, drills, aliases, key, target, minutes, position,
+    result = dl.rank_drills(rows, drills, aliases, targets, minutes, position,
                             required_tags=wanted_tags, tolerance_pct=float(tolerance), fit=fit)
+    left_out = result.attrs.get("left_out", [])
+    many = len(chosen) > 1
     if result.empty:
-        st.info("No saved drill has recorded data for that measure, position and tag combination.")
+        st.info(f"No saved drill has recorded data for {'all of those measures' if many else 'that measure'}, "
+                "that position and that tag combination.")
+        if left_out and many:
+            st.caption("Left out because they have no recorded data for one of the chosen measures in this group: "
+                       + ", ".join(left_out))
         return
 
     matches = int(result["Within range"].sum())
-    st.markdown(f"### {matches} drill{'s' if matches != 1 else ''} within {tolerance}% of the target")
-    shown = pd.DataFrame({
-        "Drill": result["Drill"],
-        "Match": ["Yes" if ok else "No" for ok in result["Within range"]],
-        "Per min": [dl.format_metric(key, v) for v in result["Per min"]],
-        f"At {minutes:g} min": [dl.format_metric(key, v, per_minute=False) for v in result["Projected"]],
-        "Difference": [f"{d:+.0f}%" for d in result["Difference %"]],
-        "Minutes needed": [f"{m:.1f} min" if pd.notna(m) else "can't reach it" for m in result["Minutes needed"]],
-        "Tags": result["Tags"],
-        "Type": result["Type"],
-        "Players": result["Players"],
-        "Sessions": result["Sessions"],
-        "Data": ["Thin" if t else "" for t in result["Thin"]],
-    })
+    st.markdown(f"### {matches} drill{'s' if matches != 1 else ''} within {tolerance}% of "
+                f"{'every target' if many else 'the target'}")
+
+    tail = {"Tags": result["Tags"], "Type": result["Type"], "Players": result["Players"],
+            "Sessions": result["Sessions"], "Data": ["Thin" if t else "" for t in result["Thin"]]}
+    match_col = ["Yes" if ok else "No" for ok in result["Within range"]]
+    if not many:
+        key = next(iter(targets))
+        shown = pd.DataFrame({
+            "Drill": result["Drill"],
+            "Match": match_col,
+            "Per min": [dl.format_metric(key, v) for v in result[f"{key}_rate"]],
+            f"At {minutes:g} min": [dl.format_metric(key, v, per_minute=False) for v in result[f"{key}_projected"]],
+            "Difference": [f"{d:+.0f}%" for d in result[f"{key}_diff"]],
+            "Minutes needed": [f"{m:.1f} min" if pd.notna(m) else "can't reach it" for m in result[f"{key}_needed"]],
+            **tail,
+        })
+        st.caption(f"Closest first. Per player, for the {position.lower()} group. 'Minutes needed' is how long the "
+                   f"drill would have to run to reach the target on its own. 'Thin' means fewer than "
+                   f"{dl.MIN_PLAYERS} players or a single session behind the numbers, so treat it as a record of "
+                   f"that day, not a benchmark.")
+    else:
+        columns = {"Drill": result["Drill"], "Match": match_col,
+                   "Worst miss": [f"{w:.0f}%" if pd.notna(w) else "n/a" for w in result["Worst miss"]]}
+        for key, (label, unit) in {k: (lab, un) for k, lab, un in dl.METRICS if k in targets}.items():
+            suffix = f" {unit}" if unit else ""
+            columns[f"{label} per min"] = [dl.format_metric(key, v) for v in result[f"{key}_rate"]]
+            columns[f"{label} at {minutes:g} min"] = [
+                f"{dl.format_metric(key, v, per_minute=False)}{suffix if key != 'hr90' else ''} ({d:+.0f}%)"
+                for v, d in zip(result[f"{key}_projected"], result[f"{key}_diff"])]
+        shown = pd.DataFrame({**columns, **tail})
+        st.caption(f"Ranked by each drill's worst miss across the chosen measures, so one far-off measure can't hide "
+                   f"behind another that's on target. It's a match only if every measure is within {tolerance}%. "
+                   f"Per player, for the {position.lower()} group. 'Thin' means fewer than {dl.MIN_PLAYERS} players "
+                   f"or a single session behind the numbers, so treat it as a record of that day, not a benchmark.")
     st.dataframe(shown, width="stretch", hide_index=True)
-    st.caption(f"Closest first. Per player, for the {position.lower()} group. 'Minutes needed' is how long the drill "
-               f"would have to run to reach the target on its own. 'Thin' means fewer than {dl.MIN_PLAYERS} players "
-               f"or a single session behind the numbers, so treat it as a record of that day, not a benchmark.")
+    if left_out:
+        st.caption("Left out because they have no recorded data for "
+                   f"{'one of the chosen measures' if many else 'this measure'} in this group: " + ", ".join(left_out))
 
 
 # ---------------------------------------------------------------- add / edit view
