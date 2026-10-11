@@ -68,12 +68,35 @@ def refresh_everything():
     load_photo.clear()
 
 
+@st.cache_resource(show_spinner=False)
+def set_up_tables():
+    """Creates the drill tables (and adds the tags column) the first time the
+    page runs, so nothing has to be done in Supabase. Returns None, or the
+    error text if it wasn't allowed to."""
+    conn = None
+    try:
+        conn = drill_db.connect()
+        drill_db.ensure_schema(conn)
+        return None
+    except Exception as exc:
+        return str(exc)
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+setup_error = set_up_tables()
+
 try:
     rows = load_rows()
     drills, aliases = load_library()
 except Exception as exc:
     st.error(f"Couldn't load data from Supabase: {exc}")
-    st.info("Check the [supabase] db_url secret, and that migration_add_drill_library.sql has been run.")
+    if setup_error:
+        st.info("The page also couldn't set up its own tables automatically "
+                f"({setup_error}). Run migration_add_drill_library.sql once in the Supabase SQL Editor instead.")
+    else:
+        st.info("Check the [supabase] db_url secret.")
     st.stop()
 
 
@@ -98,7 +121,8 @@ with btn_col:
         refresh_everything()
         st.rerun()
 with view_col:
-    view = st.radio("View", ["Library", "Add or edit a drill"], horizontal=True, label_visibility="collapsed")
+    view = st.radio("View", ["Library", "Find a drill", "Add or edit a drill"], horizontal=True,
+                    label_visibility="collapsed")
 
 if "flash" in st.session_state:
     st.success(st.session_state.pop("flash"))
@@ -119,26 +143,21 @@ def tile_row(items):
                 unsafe_allow_html=True)
 
 
-def chip(text):
-    return (f"<span style='display:inline-block;background:#eef2f7;color:{NAVY};border-radius:6px;"
+def chip(text, highlight=False):
+    bg = "#fff4d6" if highlight else "#eef2f7"
+    return (f"<span style='display:inline-block;background:{bg};color:{NAVY};border-radius:6px;"
             f"padding:3px 10px;margin:0 6px 6px 0;font-size:13px'>{escape(text)}</span>")
 
 
-def fmt_metric(key, value, per_minute=True):
-    """n/a when there is no value (e.g. no heart rate recorded), never a
-    misleading 0. Per-minute rates keep a decimal; projected totals are
-    whole numbers, except minutes above 90% HR."""
-    if value is None or pd.isna(value):
-        return "n/a"
-    if key == "hr90":
-        return f"{value:,.2f}" if per_minute else f"{value:,.1f}"
-    if per_minute:
-        return f"{value:,.0f}" if key == "distance" else f"{value:,.1f}"
-    return f"{value:,.0f}"
+def tags_in_use():
+    """Tags that at least one saved drill carries."""
+    return sorted({t for tags in drills["tags"] for t in tags}, key=str.casefold) if not drills.empty else []
 
 
-def unit_for(key, unit, per_minute):
-    return "" if (key == "hr90" and per_minute) else unit
+def has_all_tags(drill_tags, wanted):
+    return {w.casefold() for w in wanted} <= {t.casefold() for t in drill_tags}
+
+
 
 
 def note_box(kind, text):
@@ -155,8 +174,15 @@ def show_library():
         st.info("No drills saved yet. Open **Add or edit a drill** to create the first one.")
         return
 
-    names = list(drills["name"])
-    chosen = st.selectbox("Drill", names)
+    visible = drills
+    if tags_in_use():
+        tag_filter = st.multiselect("Filter by tag", tags_in_use(), key="library_tag_filter")
+        if tag_filter:
+            visible = drills[drills["tags"].apply(lambda t: has_all_tags(t, tag_filter))]
+            if visible.empty:
+                st.info("No saved drill has all of those tags.")
+                return
+    chosen = st.selectbox("Drill", list(visible["name"]))
     drill = drills[drills["name"] == chosen].iloc[0]
     drill_id = int(drill["drill_id"])
     linked = list(aliases.loc[aliases["drill_id"] == drill_id, "alias"])
@@ -182,7 +208,8 @@ def show_library():
             chips.append(f"{area:,.0f} m2 per player")
         if pd.notna(drill["planned_minutes"]):
             chips.append(f"Planned {drill['planned_minutes']:.0f} min")
-        st.markdown("".join(chip(c) for c in chips), unsafe_allow_html=True)
+        st.markdown("".join(chip(c) for c in chips) + "".join(chip(t, highlight=True) for t in drill["tags"]),
+                    unsafe_allow_html=True)
         if drill["notes"]:
             st.write(drill["notes"])
         st.caption(f"Linked to {len(linked)} name(s) in the GPS data" if linked
@@ -211,33 +238,90 @@ def show_library():
         st.warning(dl.thin_message(players, sessions))
     else:
         st.caption(f"Based on {players} players across {sessions} sessions, {row['Minutes']:,.0f} player-minutes.")
-    tile_row([tile(f"{label} per min", fmt_metric(k, row[k]), unit_for(k, unit, True)) for k, label, unit in dl.METRICS])
+    tile_row([tile(f"{label} per min", dl.format_metric(k, row[k]), unit) for k, label, unit in dl.METRICS])
     if pd.isna(row["hr90"]):
         st.caption("No heart rate found for this drill. Firstbeat has to record it under the same drill "
                    "name as the GPS for it to link up.")
     else:
-        st.caption(f"Minutes above 90% HR per min of {row['hr90']:.2f} means about {row['hr90'] * 100:.0f}% of "
-                   f"the drill was spent above 90% of max HR. Heart rate recorded for "
+        st.caption(f"On average {dl.format_hr_time(row['hr90'])} of every minute was spent above 90% of max HR "
+                   f"(about {row['hr90'] * 100:.0f}% of the drill). Heart rate recorded for "
                    f"{int(row['HR players'])} of {players} players.")
 
     with st.expander("All positions"):
-        table = summary.copy()
-        table["Minutes"] = table["Minutes"].round(0)
-        table["Note"] = ["Thin" if dl.is_thin(int(p), int(s)) else "" for p, s in zip(table["Players"], table["Sessions"])]
+        table = summary[["Position", "Players", "Sessions"]].copy()
+        table["Minutes"] = summary["Minutes"].round(0)
+        table["Data"] = ["Thin" if dl.is_thin(int(p), int(n)) else "" for p, n in zip(summary["Players"], summary["Sessions"])]
         for k, label, unit in dl.METRICS:
-            decimals = 0 if k == "distance" else (2 if k == "hr90" else 1)
-            table[label + (f" ({unit})" if unit else "") + " / min"] = table[k].round(decimals)
-        st.dataframe(table.drop(columns=[k for k, _, _ in dl.METRICS]), width="stretch", hide_index=True)
+            table[label + (f" ({unit})" if unit else "") + " / min"] = [dl.format_metric(k, v) for v in summary[k]]
+        st.dataframe(table, width="stretch", hide_index=True)
 
     st.markdown("### If we run this drill for...")
     default_minutes = float(drill["planned_minutes"]) if pd.notna(drill["planned_minutes"]) else 10.0
     minutes = st.number_input("Minutes", min_value=1.0, max_value=120.0, value=default_minutes,
                               step=1.0, key=f"mins_{drill_id}")
     projected = dl.project(row, minutes)
-    tile_row([tile(label, fmt_metric(k, projected[k], per_minute=False), unit_for(k, unit, False))
+    tile_row([tile(label, dl.format_metric(k, projected[k], per_minute=False), unit)
               for k, label, unit in dl.METRICS])
     note_box(*dl.projection_note(minutes, dl.observed_block_minutes(data)))
     st.caption(f"Per player, for the {position.lower()} group. Assumes the per-minute rate holds for the whole time.")
+
+
+# ---------------------------------------------------------------- find a drill
+FINDER_DEFAULTS = {"distance": (1000.0, 100.0), "hsr": (100.0, 10.0), "sprint": (20.0, 5.0),
+                   "accel": (20.0, 5.0), "decel": (20.0, 5.0), "hr90": (2.0, 0.5)}
+
+
+def show_finder():
+    if drills.empty:
+        st.info("No drills saved yet, so there is nothing to search. Add some first.")
+        return
+    st.markdown("Pick a measure and a target, and it ranks your saved drills by how close each would get "
+                "if you ran it for the minutes you have, using what players actually produced in it.")
+
+    by_label = {label: (key, unit) for key, label, unit in dl.METRICS}
+    c1, c2, c3 = st.columns(3)
+    label = c1.selectbox("Measure", list(by_label))
+    key, unit = by_label[label]
+    default_target, step = FINDER_DEFAULTS[key]
+    target_label = "Target (minutes above 90% HR)" if key == "hr90" else (f"Target ({unit})" if unit else "Target (count)")
+    target = c2.number_input(target_label, min_value=0.1, value=default_target, step=step,
+                             key=f"finder_target_{key}", format="%.1f")
+    minutes = c3.number_input("Minutes available", min_value=1.0, max_value=120.0, value=10.0, step=1.0)
+
+    c4, c5, c6 = st.columns(3)
+    positions = ["All outfield"] + sorted(p for p in rows["position"].dropna().unique())
+    position = c4.selectbox("Position", positions)
+    wanted_tags = c5.multiselect("Drill must have all of these tags", tags_in_use(),
+                                 help="Leave empty to search every drill.")
+    tolerance = c6.slider("Counts as a match within (%)", 5, 50, 20, step=5)
+    fit = st.checkbox("Fit players only", value=True,
+                      help="Leaves out players recorded as injured, modified or international on the day.")
+
+    result = dl.rank_drills(rows, drills, aliases, key, target, minutes, position,
+                            required_tags=wanted_tags, tolerance_pct=float(tolerance), fit=fit)
+    if result.empty:
+        st.info("No saved drill has recorded data for that measure, position and tag combination.")
+        return
+
+    matches = int(result["Within range"].sum())
+    st.markdown(f"### {matches} drill{'s' if matches != 1 else ''} within {tolerance}% of the target")
+    shown = pd.DataFrame({
+        "Drill": result["Drill"],
+        "Match": ["Yes" if ok else "No" for ok in result["Within range"]],
+        "Per min": [dl.format_metric(key, v) for v in result["Per min"]],
+        f"At {minutes:g} min": [dl.format_metric(key, v, per_minute=False) for v in result["Projected"]],
+        "Difference": [f"{d:+.0f}%" for d in result["Difference %"]],
+        "Minutes needed": [f"{m:.1f} min" if pd.notna(m) else "can't reach it" for m in result["Minutes needed"]],
+        "Tags": result["Tags"],
+        "Type": result["Type"],
+        "Players": result["Players"],
+        "Sessions": result["Sessions"],
+        "Data": ["Thin" if t else "" for t in result["Thin"]],
+    })
+    st.dataframe(shown, width="stretch", hide_index=True)
+    st.caption(f"Closest first. Per player, for the {position.lower()} group. 'Minutes needed' is how long the drill "
+               f"would have to run to reach the target on its own. 'Thin' means fewer than {dl.MIN_PLAYERS} players "
+               f"or a single session behind the numbers, so treat it as a record of that day, not a benchmark.")
 
 
 # ---------------------------------------------------------------- add / edit view
@@ -287,6 +371,10 @@ def show_editor():
         default_aliases = list(aliases.loc[aliases["drill_id"] == target_id, "alias"])
         linked_elsewhere -= set(default_aliases)
 
+    tag_options = dl.all_tags(drills)
+    current_tags = list(current["tags"]) if current is not None else []
+    tag_options = tag_options + [t for t in current_tags if t not in tag_options]
+
     available = [a for a in all_labels if a not in linked_elsewhere]
     for a in default_aliases:                     # keep currently-linked names selectable
         if a not in available:
@@ -303,6 +391,10 @@ def show_editor():
         players = c3.number_input("Players", min_value=0, value=defaults["num_players"], step=1)
         planned = c4.number_input("Planned minutes", min_value=0.0, value=defaults["planned_minutes"], step=1.0)
         notes = st.text_area("Notes", value=defaults["notes"])
+        chosen_tags = st.multiselect("Tags", options=tag_options, default=current_tags,
+                                     help="Tick any that apply, such as In possession or Out of possession.")
+        new_tag_text = st.text_input("Add new tags (separate with commas)", value="",
+                                     help="Anything not in the list above. It will appear in the list from then on.")
         linked_names = st.multiselect(
             "Names this drill goes by in the GPS data", options=available, default=default_aliases,
             help="Every drill label in Catapult that is this drill (block prefixes, BLOCK 1-4, spelling "
@@ -321,7 +413,8 @@ def show_editor():
                 drill_db.save_drill(
                     conn, target_id,
                     {"name": name, "drill_type": drill_type, "pitch_length_m": length, "pitch_width_m": width,
-                     "num_players": players, "planned_minutes": planned, "notes": notes},
+                     "num_players": players, "planned_minutes": planned, "notes": notes,
+                     "tags": dl.clean_tags(chosen_tags, new_tag_text, known=tag_options)},
                     linked_names, photo=photo, photo_mime=mime, remove_photo=remove_photo)
             finally:
                 conn.close()
@@ -351,5 +444,7 @@ def show_editor():
 
 if view == "Library":
     show_library()
+elif view == "Find a drill":
+    show_finder()
 else:
     show_editor()
