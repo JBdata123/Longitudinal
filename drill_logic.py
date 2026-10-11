@@ -26,7 +26,7 @@ METRICS = [
 
 # Bumped whenever the three Drill Library files change together. The page refuses to run if they
 # don't all carry the same number (a half-finished upload), and says which file is out of date.
-LIBRARY_VERSION = 3
+LIBRARY_VERSION = 4
 
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
 
@@ -313,17 +313,29 @@ def all_tags(drills):
 
 
 # ---------------------------------------------------------------- find a drill
-def rank_drills(rows, drills, aliases, metric, target, minutes, position="All outfield",
+def rank_drills(rows, drills, aliases, targets, minutes, position="All outfield",
                 required_tags=(), tolerance_pct=20.0, fit=True):
-    """Which saved drills would deliver `target` of `metric` (per player) if
-    run for `minutes`? Uses the output per minute actually recorded for the
-    chosen position group, projects it to `minutes`, and ranks by how close
-    it lands. Also says how many minutes each drill would need to hit the
-    target outright. Drills with no data for that measure are left out."""
-    cols = ["Drill", "Type", "Tags", "Players", "Sessions", "Per min", "Projected",
-            "Difference %", "Minutes needed", "Within range", "Thin"]
+    """Which saved drills would give the group the targets, if run for `minutes`?
+
+    `targets` is {measure key: target}, one or several. Every target is a GROUP
+    AVERAGE: what the average player in the chosen position group would
+    produce -- the output per player-minute actually recorded in the drill,
+    projected to `minutes`.
+
+    A drill is a match only if EVERY measure lands within `tolerance_pct` of
+    its target, and drills are ranked by their worst miss, so one measure
+    far off can't hide behind another that's spot on. A drill with no
+    recorded data for any one of the chosen measures can't be judged, so it
+    is left out and its name is listed in result.attrs['left_out'].
+
+    Columns: Drill, Type, Tags, Players, Sessions, Thin, Within range,
+    Worst miss, then for each measure key k: k_rate, k_projected, k_diff
+    (percent), k_needed (minutes the drill alone would need to hit the target)."""
+    keys = list(targets)
+    base = ["Drill", "Type", "Tags", "Players", "Sessions", "Thin", "Within range", "Worst miss"]
+    cols = base + [f"{k}_{part}" for k in keys for part in ("rate", "projected", "diff", "needed")]
     need = {str(t).casefold() for t in required_tags}
-    out = []
+    out, left_out = [], []
     for drill in drills.itertuples():
         tags = list(drill.tags) if isinstance(drill.tags, (list, tuple)) else []
         if not need <= {t.casefold() for t in tags}:
@@ -334,24 +346,28 @@ def rank_drills(rows, drills, aliases, metric, target, minutes, position="All ou
             data = fit_only(data)
         summary = per_minute_by_position(data)
         sel = summary[summary["Position"] == position]
-        if sel.empty:
+        if sel.empty or any(pd.isna(sel.iloc[0][k]) for k in keys):
+            left_out.append(drill.name)
             continue
         sel = sel.iloc[0]
-        rate = sel[metric]
-        if pd.isna(rate):
-            continue
-        projected = float(rate) * minutes
-        out.append({
-            "Drill": drill.name, "Type": drill.drill_type, "Tags": ", ".join(tags),
-            "Players": int(sel["Players"]), "Sessions": int(sel["Sessions"]),
-            "Per min": float(rate), "Projected": projected,
-            "Difference %": (projected - target) / target * 100 if target else float("nan"),
-            "Minutes needed": (target / float(rate)) if rate > 0 else float("nan"),
-            "Within range": abs(projected - target) / target * 100 <= tolerance_pct if target else False,
-            "Thin": is_thin(int(sel["Players"]), int(sel["Sessions"])),
-        })
-    if not out:
-        return pd.DataFrame(columns=cols)
+        row = {"Drill": drill.name, "Type": drill.drill_type, "Tags": ", ".join(tags),
+               "Players": int(sel["Players"]), "Sessions": int(sel["Sessions"]),
+               "Thin": is_thin(int(sel["Players"]), int(sel["Sessions"]))}
+        diffs = []
+        for k in keys:
+            rate = float(sel[k])
+            projected = rate * minutes
+            target = targets[k]
+            diff = (projected - target) / target * 100 if target else float("nan")
+            row[f"{k}_rate"], row[f"{k}_projected"], row[f"{k}_diff"] = rate, projected, diff
+            row[f"{k}_needed"] = (target / rate) if rate > 0 else float("nan")
+            diffs.append(diff)
+        judged = all(pd.notna(d) for d in diffs)
+        row["Worst miss"] = max(abs(d) for d in diffs) if judged else float("nan")
+        row["Within range"] = bool(judged and row["Worst miss"] <= tolerance_pct)
+        out.append(row)
     df = pd.DataFrame(out, columns=cols)
-    df["_gap"] = df["Difference %"].abs()
-    return df.sort_values(["_gap", "Drill"]).drop(columns="_gap").reset_index(drop=True)
+    if not df.empty:
+        df = df.sort_values(["Worst miss", "Drill"], na_position="last").reset_index(drop=True)
+    df.attrs["left_out"] = left_out
+    return df
