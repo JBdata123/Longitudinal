@@ -24,6 +24,10 @@ METRICS = [
     ("hr90", "Time above 90% HR", ""),
 ]
 
+# Bumped whenever the three Drill Library files change together. The page refuses to run if they
+# don't all carry the same number (a half-finished upload), and says which file is out of date.
+LIBRARY_VERSION = 3
+
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
 
 # A figure built from fewer than this is a record of what happened on the
