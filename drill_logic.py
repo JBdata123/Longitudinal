@@ -21,7 +21,7 @@ METRICS = [
     ("sprint", "Sprint distance", "m"),
     ("accel", "Accelerations 1-3", ""),
     ("decel", "Decelerations 1-3", ""),
-    ("hr90", "Minutes above 90% HR", "min"),
+    ("hr90", "Time above 90% HR", ""),
 ]
 
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
@@ -244,3 +244,110 @@ def area_per_player(length_m, width_m, players):
         return float(length_m) * float(width_m) / float(players)
     except (TypeError, ValueError):
         return None
+
+
+# ---------------------------------------------------------------- display formatting
+def format_hr_time(minutes):
+    """Minutes (as a number) -> readable time: '45 sec', '1 min 30 sec', '2 min'.
+    Used for every heart rate figure, so 0.10 min per minute reads '6 sec'."""
+    if minutes is None or pd.isna(minutes):
+        return "n/a"
+    minutes = max(float(minutes), 0.0)
+    total = int(round(minutes * 60))
+    if total == 0:
+        return "0 sec" if minutes == 0 else "<1 sec"
+    mins, secs = divmod(total, 60)
+    if mins == 0:
+        return f"{secs} sec"
+    return f"{mins} min" if secs == 0 else f"{mins} min {secs} sec"
+
+
+_PER_MINUTE_DECIMALS = {"distance": 0, "hsr": 2, "sprint": 2, "accel": 1, "decel": 1}
+_TOTAL_DECIMALS = {"distance": 0, "hsr": 1, "sprint": 1, "accel": 0, "decel": 0}
+
+
+def format_metric(key, value, per_minute=True):
+    """One place that decides how every figure is written. n/a for a missing
+    value (never a misleading 0); heart rate as a time; HSR and sprint keep
+    two decimals per minute (they're small), one in a projected total."""
+    if value is None or pd.isna(value):
+        return "n/a"
+    if key == "hr90":
+        return format_hr_time(value)
+    decimals = (_PER_MINUTE_DECIMALS if per_minute else _TOTAL_DECIMALS)[key]
+    return f"{value:,.{decimals}f}"
+
+
+# ---------------------------------------------------------------- tags
+DEFAULT_TAGS = ["In possession", "Out of possession", "Transition", "Set pieces",
+                "Small-sided game", "Rondo", "Finishing", "Conditioning"]
+
+
+def clean_tags(selected=(), new_text="", known=()):
+    """Combine ticked tags with any typed in (comma separated). Trims spaces,
+    drops blanks and duplicates (ignoring capitalisation), and if a typed tag
+    matches an existing one it takes that tag's capitalisation."""
+    canonical = {str(k).casefold(): str(k) for k in known}
+    items = list(selected or [])
+    if new_text:
+        items += re.split(r"[,;\n]", str(new_text))
+    seen, out = set(), []
+    for item in items:
+        tag = re.sub(r"\s+", " ", str(item)).strip()[:40]
+        key = tag.casefold()
+        if tag and key not in seen:
+            seen.add(key)
+            out.append(canonical.get(key, tag))
+    return out
+
+
+def all_tags(drills):
+    """Starter tags first, then any others already used on a saved drill."""
+    used = {t for tags in (drills["tags"] if "tags" in drills else []) for t in (tags or [])}
+    extra = sorted(used - {t for t in DEFAULT_TAGS}, key=str.casefold)
+    return DEFAULT_TAGS + extra
+
+
+# ---------------------------------------------------------------- find a drill
+def rank_drills(rows, drills, aliases, metric, target, minutes, position="All outfield",
+                required_tags=(), tolerance_pct=20.0, fit=True):
+    """Which saved drills would deliver `target` of `metric` (per player) if
+    run for `minutes`? Uses the output per minute actually recorded for the
+    chosen position group, projects it to `minutes`, and ranks by how close
+    it lands. Also says how many minutes each drill would need to hit the
+    target outright. Drills with no data for that measure are left out."""
+    cols = ["Drill", "Type", "Tags", "Players", "Sessions", "Per min", "Projected",
+            "Difference %", "Minutes needed", "Within range", "Thin"]
+    need = {str(t).casefold() for t in required_tags}
+    out = []
+    for drill in drills.itertuples():
+        tags = list(drill.tags) if isinstance(drill.tags, (list, tuple)) else []
+        if not need <= {t.casefold() for t in tags}:
+            continue
+        linked = set(aliases.loc[aliases["drill_id"] == drill.drill_id, "alias"])
+        data = rows[rows["drill_label"].isin(linked)]
+        if fit:
+            data = fit_only(data)
+        summary = per_minute_by_position(data)
+        sel = summary[summary["Position"] == position]
+        if sel.empty:
+            continue
+        sel = sel.iloc[0]
+        rate = sel[metric]
+        if pd.isna(rate):
+            continue
+        projected = float(rate) * minutes
+        out.append({
+            "Drill": drill.name, "Type": drill.drill_type, "Tags": ", ".join(tags),
+            "Players": int(sel["Players"]), "Sessions": int(sel["Sessions"]),
+            "Per min": float(rate), "Projected": projected,
+            "Difference %": (projected - target) / target * 100 if target else float("nan"),
+            "Minutes needed": (target / float(rate)) if rate > 0 else float("nan"),
+            "Within range": abs(projected - target) / target * 100 <= tolerance_pct if target else False,
+            "Thin": is_thin(int(sel["Players"]), int(sel["Sessions"])),
+        })
+    if not out:
+        return pd.DataFrame(columns=cols)
+    df = pd.DataFrame(out, columns=cols)
+    df["_gap"] = df["Difference %"].abs()
+    return df.sort_values(["_gap", "Drill"]).drop(columns="_gap").reset_index(drop=True)
