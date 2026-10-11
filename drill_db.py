@@ -13,7 +13,7 @@ import psycopg2
 
 # Bumped whenever the three Drill Library files change together. The page refuses to run if they
 # don't all carry the same number (a half-finished upload), and says which file is out of date.
-LIBRARY_VERSION = 3
+LIBRARY_VERSION = 4
 
 TRAINING_ROWS_SQL = """
     select
