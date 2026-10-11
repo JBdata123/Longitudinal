@@ -11,6 +11,10 @@ import io
 import pandas as pd
 import psycopg2
 
+# Bumped whenever the three Drill Library files change together. The page refuses to run if they
+# don't all carry the same number (a half-finished upload), and says which file is out of date.
+LIBRARY_VERSION = 3
+
 TRAINING_ROWS_SQL = """
     select
         player, position, session_date, drill_label, player_status,
