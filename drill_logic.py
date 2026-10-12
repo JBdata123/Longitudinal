@@ -1,520 +1,416 @@
 """
-Drill Library.
+Drill library calculations -- no Streamlit, no database, so everything here
+can be tested on its own (see tests/test_drill_logic.py).
 
-Save a drill's details (pitch size, players, planned minutes, notes, photo),
-link it to the names it goes by in Catapult, and see what players actually
-produced in it per minute -- by position -- plus what a given number of
-minutes would come to.
-
-Needs: migration_add_drill_library.sql run once in Supabase, and
-[supabase] db_url in the Streamlit secrets (same as the Minutes Played page).
+Rules that matter:
+  * Output per minute is TOTAL metric / TOTAL minutes across every record,
+    never an average of each player's own rate. (Averaging rates lets a
+    player with 40 seconds in a drill count as much as one who did the whole
+    block -- the same mistake that distorted the MPM-per-quarter chart.)
+  * Every figure comes with how many players and sessions are behind it, and
+    thin ones are flagged. Most drills have only been run once.
 """
-from datetime import datetime
-from html import escape
-from zoneinfo import ZoneInfo
+import re
 
 import pandas as pd
-import streamlit as st
 
-import drill_db
-import drill_logic as dl
-from theme import NAVY, GOLD, WHITE, FONT
+# (column key, label, unit) -- the six measures shown for every drill
+METRICS = [
+    ("distance", "Total distance", "m"),
+    ("hsr", "HSR (bands 4+5)", "m"),
+    ("sprint", "Sprint distance", "m"),
+    ("accel", "Accelerations 1-3", ""),
+    ("decel", "Decelerations 1-3", ""),
+    ("hr90", "Time above 90% HR", ""),
+]
 
-CACHE_TTL_SECONDS = 60
+# Bumped whenever the three Drill Library files change together. The page refuses to run if they
+# don't all carry the same number (a half-finished upload), and says which file is out of date.
+LIBRARY_VERSION = 6
+LIBRARY_FILE = "drill_logic.py"      # which file this is, so the page can tell if the wrong code was uploaded under this name
 
-st.set_page_config(page_title="Drill Library", layout="wide")
+DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
 
-st.markdown(f"""
-<style>
-    .stApp {{ background-color: {WHITE}; }}
-    #MainMenu, footer {{visibility: hidden;}}
-    h1, h2, h3 {{ color: {NAVY}; }}
-</style>
-""", unsafe_allow_html=True)
+# A figure built from fewer than this is a record of what happened on the
+# day, not a benchmark.
+MIN_PLAYERS = 5
+MIN_SESSIONS = 2
 
-# ---------------------------------------------------------------- are all three files the same version?
-LIBRARY_VERSION = 5          # keep in step with drill_logic.py and drill_db.py
-
-_out_of_date = [name for name, module in (("drill_logic.py", dl), ("drill_db.py", drill_db))
-                if getattr(module, "LIBRARY_VERSION", None) != LIBRARY_VERSION]
-if _out_of_date:
-    st.error("The Drill Library files in your GitHub repo don't match each other. "
-             f"Out of date: {', '.join(_out_of_date)}.")
-    st.info("Upload the latest version of all three files together (Drill_Library.py, drill_logic.py and "
-            "drill_db.py), replacing the old ones. Then open Manage app and choose Reboot app.")
-    st.stop()
+# Labels in master_data that are not drills at all.
+NON_DRILL_LABELS = ("SESSION", "TEAM SESSION", "1ST HALF", "2ND HALF", "WARM UP", "EXTRAS")
 
 
-# ---------------------------------------------------------------- data
-@st.cache_data(ttl=CACHE_TTL_SECONDS, show_spinner="Loading drill data...")
-def load_rows():
-    conn = drill_db.connect()
+def parse_minutes(duration_text):
+    """HH:MM:SS text -> minutes. Anything unusable is 0."""
+    if duration_text is None or (isinstance(duration_text, float) and pd.isna(duration_text)):
+        return 0.0
+    text = str(duration_text).strip()
+    if len(text) < 8:
+        return 0.0
     try:
-        return dl.prepare_rows(drill_db.fetch_training_rows(conn))
-    finally:
-        conn.close()
+        return int(text[0:2]) * 60 + int(text[3:5]) + int(text[6:8]) / 60
+    except ValueError:
+        return 0.0
 
 
-@st.cache_data(ttl=30)
-def load_library():
-    conn = drill_db.connect()
+def normalise_drill_key(label):
+    """What two labels have in common when they are the same drill.
+    Removes the session-block prefix (B1 -, B3 -), the BLOCK n suffix and any
+    spacing/punctuation, so '11 V 11' = '11V11' and 'WALK THROUGH' =
+    'WALKTHROUGH'. Genuine wording differences (THROUGH vs WITH, SET PLAYS vs
+    SET PIECES) are deliberately NOT merged -- those need a human."""
+    text = str(label or "").upper().strip()
+    text = re.sub(r"^B\d+(\s*-\s*|\s+)", "", text)      # "B1 - 5V3 ..." and "B4 3V2"
+    text = re.sub(r"\s+BLOCK\s+\d+$", "", text)
+    return re.sub(r"[^A-Z0-9+]", "", text)
+
+
+def clean_display_name(label):
+    """Same clean-up as the key, but keeps the readable text."""
+    text = str(label or "").strip()
+    text = re.sub(r"^B\d+(\s*-\s*|\s+)", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+BLOCK\s+\d+$", "", text, flags=re.IGNORECASE).strip()
+
+
+def guess_drill_type(label, avg_players_per_session):
+    """Best guess at what a label is, so the library can hide the things that
+    aren't team drills. Only a suggestion -- the user can change it."""
+    name = str(label or "").upper().strip()
+    if name.startswith(("GOALKEEPER", "GK ")) or name == "GK":
+        return "GK"
+    if name == "REHAB":
+        return "Rehab"
+    if name.startswith("WARM UP"):
+        return "Warm-up"
+    if "TEST" in name or "ENDURANCE" in name:
+        return "Test / conditioning"
+    if name == "UNKNOWN DRILL" or name.startswith("ACADEMY"):
+        return "Other"
+    if re.search(r"\bTRAINING( \d+)?$", name) and avg_players_per_session < 5:
+        return "Individual"
+    return "Team drill"
+
+
+def parse_minutes_or_nan(duration_text):
+    """Like parse_minutes, but a missing value stays missing (NaN) instead of
+    becoming 0. Needed for heart rate: 'no Firstbeat data for this drill' is
+    not the same as '0 minutes above 90%'."""
+    if duration_text is None or (isinstance(duration_text, float) and pd.isna(duration_text)):
+        return float("nan")
+    text = str(duration_text).strip()
+    if len(text) < 8:
+        return float("nan")
     try:
-        return drill_db.fetch_drills(conn), drill_db.fetch_aliases(conn)
-    finally:
-        conn.close()
+        return int(text[0:2]) * 60 + int(text[3:5]) + int(text[6:8]) / 60
+    except ValueError:
+        return float("nan")
 
 
-@st.cache_data(ttl=300)
-def load_photo(drill_id, version):
-    """`version` is the drill's updated_at, so a new photo shows straight away."""
-    conn = drill_db.connect()
-    try:
-        return drill_db.fetch_photo(conn, drill_id)
-    finally:
-        conn.close()
+def prepare_rows(df):
+    """Adds the numeric columns the library needs to the raw master_data rows."""
+    d = df.copy()
+    num = lambda col: pd.to_numeric(d[col], errors="coerce").fillna(0) if col in d else 0.0
+    d["minutes"] = d["gps_total_duration"].apply(parse_minutes)
+    d["distance"] = num("gps_total_distance")
+    d["hsr"] = num("gps_velocity_band_4_total_distance") + num("gps_velocity_band_5_total_distance")
+    d["sprint"] = num("gps_sd")
+    d["accel"] = num("gps_acceleration_b1_3_total_efforts_gen_2")
+    d["decel"] = num("gps_deceleration_b1_3_total_efforts_gen_2")
+    if "fb_high_intensity_training_hh_mm_ss" in d:
+        d["hr90"] = d["fb_high_intensity_training_hh_mm_ss"].apply(parse_minutes_or_nan)
+    else:
+        d["hr90"] = float("nan")
+    d["position"] = d["position"].fillna("Unknown").replace("", "Unknown")
+    return d
 
 
-def refresh_everything():
-    load_rows.clear()
-    load_library.clear()
-    load_photo.clear()
+def fit_only(df):
+    """Drop rows where the player's recorded status is anything other than
+    Fit (Injured, Modified, International...). Rows with no status recorded
+    are kept -- older dates predate the squad status file."""
+    status = df["player_status"].astype("string").str.strip().str.lower()
+    return df[status.isna() | (status == "fit")]
 
 
-@st.cache_resource(show_spinner=False)
-def set_up_tables():
-    """Creates the drill tables (and adds the tags column) the first time the
-    page runs, so nothing has to be done in Supabase. Returns None, or the
-    error text if it wasn't allowed to."""
-    conn = None
-    try:
-        conn = drill_db.connect()
-        drill_db.ensure_schema(conn)
+def suggest_groups(rows, linked_aliases):
+    """Groups the drill names in the data that aren't in the library yet by
+    what they have in common, ready to be turned into library drills."""
+    cols = ["key", "suggested_name", "labels", "sessions", "players", "type"]
+    if rows.empty:
+        return pd.DataFrame(columns=cols)
+    per_label = rows.groupby("drill_label").agg(
+        sessions=("session_date", "nunique"), player_rows=("player", "size")
+    )
+    per_label = per_label[~per_label.index.isin(set(linked_aliases))]
+    if per_label.empty:
+        return pd.DataFrame(columns=cols)
+    per_label["avg_players"] = per_label["player_rows"] / per_label["sessions"]
+    per_label["key"] = [normalise_drill_key(x) for x in per_label.index]
+    out = []
+    for key, grp in per_label.groupby("key"):
+        labels = sorted(grp.index)
+        in_group = rows[rows["drill_label"].isin(labels)]
+        # name & type come from the most-used label in the group
+        lead = grp.sort_values(["sessions", "player_rows"], ascending=False).index[0]
+        out.append({
+            "key": key,
+            "suggested_name": clean_display_name(lead),
+            "labels": labels,
+            "sessions": in_group["session_date"].nunique(),
+            "players": in_group["player"].nunique(),
+            "type": guess_drill_type(lead, grp.loc[lead, "avg_players"]),
+        })
+    return pd.DataFrame(out, columns=cols).sort_values(
+        ["sessions", "suggested_name"], ascending=[False, True]
+    ).reset_index(drop=True)
+
+
+def per_minute_by_position(df):
+    """One row per position group plus 'All outfield'. Output per minute is
+    total / total minutes, with the players and sessions behind it.
+
+    Heart rate is worked out only from rows that actually have Firstbeat
+    data (and only against the minutes of those same rows), so a player with
+    no heart rate recorded can't drag the figure down. If nobody has any,
+    it's NaN -- shown as n/a, never as 0."""
+    keys = [k for k, _, _ in METRICS]
+    cols = ["Position", "Players", "Sessions", "Minutes", "HR players"] + keys
+    d = df[df["minutes"] > 0]
+    if d.empty:
+        return pd.DataFrame(columns=cols)
+
+    def build(label, g):
+        mins = g["minutes"].sum()
+        with_hr = g[g["hr90"].notna()]
+        row = {"Position": label, "Players": g["player"].nunique(),
+               "Sessions": g["session_date"].nunique(), "Minutes": mins,
+               "HR players": with_hr["player"].nunique()}
+        for k in keys:
+            if k == "hr90":
+                hr_minutes = with_hr["minutes"].sum()
+                row[k] = with_hr["hr90"].sum() / hr_minutes if hr_minutes > 0 else float("nan")
+            else:
+                row[k] = g[k].sum() / mins
+        return row
+
+    rows = [build("All outfield", d)]
+    for pos, g in d.groupby("position"):
+        rows.append(build(pos, g))
+    return pd.DataFrame(rows, columns=cols)
+
+
+def is_thin(players, sessions):
+    return players < MIN_PLAYERS or sessions < MIN_SESSIONS
+
+
+def thin_message(players, sessions):
+    return (f"Based on {players} player(s) in {sessions} session(s). "
+            "That's a record of what happened on the day, not a benchmark.")
+
+
+def observed_block_minutes(df):
+    """(shortest, longest) block this drill has been logged at: for every
+    time it was run, the longest any player did. Using the longest keeps a
+    substitute's 40 seconds from looking like a 40-second drill."""
+    d = df[df["minutes"] > 0]
+    if d.empty:
         return None
-    except Exception as exc:
-        return str(exc)
-    finally:
-        if conn is not None:
-            conn.close()
+    per_run = d.groupby(["session_date", "drill_label"])["minutes"].max()
+    return float(per_run.min()), float(per_run.max())
 
 
-setup_error = set_up_tables()
-
-try:
-    rows = load_rows()
-    drills, aliases = load_library()
-except Exception as exc:
-    st.error(f"Couldn't load data from Supabase: {exc}")
-    if setup_error:
-        st.info("The page also couldn't set up its own tables automatically "
-                f"({setup_error}). Run migration_add_drill_library.sql once in the Supabase SQL Editor instead.")
-    else:
-        st.info("Check the [supabase] db_url secret.")
-    st.stop()
+def project(per_minute_row, minutes):
+    """If the drill ran for `minutes`, what each metric comes to."""
+    return {k: float(per_minute_row[k]) * minutes for k, _, _ in METRICS}
 
 
-# ---------------------------------------------------------------- header
-st.markdown(
-    f"""
-    <div style="background-color:{NAVY}; border-bottom:5px solid {GOLD}; padding:16px 24px;
-                margin-bottom:20px; color:{WHITE}; display:flex; align-items:center;
-                justify-content:space-between;">
-        <div style="font-size:28px; font-weight:800; letter-spacing:1px; color:{WHITE};">DRILL LIBRARY</div>
-        <div style="font-size:11px; opacity:0.85; text-align:right; color:{WHITE}; white-space:nowrap;">
-            last loaded {datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-btn_col, view_col = st.columns([2, 8])
-with btn_col:
-    if st.button("Refresh data now"):
-        refresh_everything()
-        st.rerun()
-with view_col:
-    view = st.radio("View", ["Library", "Find a drill", "Add or edit a drill"], horizontal=True,
-                    label_visibility="collapsed")
-
-if "flash" in st.session_state:
-    st.success(st.session_state.pop("flash"))
+def projection_note(minutes, observed):
+    """('ok'|'long'|'short'|'unknown', text) -- how far to trust a projection.
+    Output per minute usually falls as a block gets longer, so going beyond
+    what has been logged is an upper estimate; well below it, a lower one."""
+    if observed is None:
+        return "unknown", "No block length is logged for this drill yet."
+    lo, hi = observed
+    span = f"{lo:.0f} to {hi:.0f} min" if round(lo) != round(hi) else f"{hi:.0f} min"
+    if minutes > hi * 1.25:
+        return "long", (f"Longer than any logged block ({span}). Intensity usually drops over "
+                        "longer blocks, so treat this as an upper estimate.")
+    if minutes < lo * 0.5:
+        return "short", (f"Shorter than any logged block ({span}). Short bursts are usually "
+                         "more intense, so treat this as a lower estimate.")
+    return "ok", f"Inside the range this drill has been logged at ({span})."
 
 
-# ---------------------------------------------------------------- small helpers
-def tile(label, value, unit=""):
-    unit_html = f"<span style='font-size:12px;font-weight:400;opacity:.85'> {escape(unit)}</span>" if unit else ""
-    return (f"<div style='background:{NAVY};color:{WHITE};border-radius:8px;padding:10px 14px;"
-            f"font-family:{FONT}'><div style='font-size:11px;text-transform:uppercase;letter-spacing:.5px;"
-            f"opacity:.85'>{escape(label)}</div><div style='font-size:24px;font-weight:700;line-height:1.2'>"
-            f"{escape(value)}{unit_html}</div></div>")
+def area_per_player(length_m, width_m, players):
+    """Pitch area per player in m2, or None if anything is missing."""
+    try:
+        if not (length_m and width_m and players):
+            return None
+        return float(length_m) * float(width_m) / float(players)
+    except (TypeError, ValueError):
+        return None
 
 
-def tile_row(items):
-    cells = "".join(f"<div style='flex:1;min-width:120px'>{t}</div>" for t in items)
-    st.markdown(f"<div style='display:flex;gap:10px;flex-wrap:wrap;margin:8px 0'>{cells}</div>",
-                unsafe_allow_html=True)
+# ---------------------------------------------------------------- display formatting
+def format_hr_time(minutes):
+    """Minutes (as a number) -> readable time: '45 sec', '1 min 30 sec', '2 min'.
+    Used for every heart rate figure, so 0.10 min per minute reads '6 sec'."""
+    if minutes is None or pd.isna(minutes):
+        return "n/a"
+    minutes = max(float(minutes), 0.0)
+    total = int(round(minutes * 60))
+    if total == 0:
+        return "0 sec" if minutes == 0 else "<1 sec"
+    mins, secs = divmod(total, 60)
+    if mins == 0:
+        return f"{secs} sec"
+    return f"{mins} min" if secs == 0 else f"{mins} min {secs} sec"
 
 
-def chip(text, highlight=False):
-    bg = "#fff4d6" if highlight else "#eef2f7"
-    return (f"<span style='display:inline-block;background:{bg};color:{NAVY};border-radius:6px;"
-            f"padding:3px 10px;margin:0 6px 6px 0;font-size:13px'>{escape(text)}</span>")
+_PER_MINUTE_DECIMALS = {"distance": 0, "hsr": 2, "sprint": 2, "accel": 1, "decel": 1}
+_TOTAL_DECIMALS = {"distance": 0, "hsr": 1, "sprint": 1, "accel": 0, "decel": 0}
 
 
-def tags_in_use():
-    """Tags that at least one saved drill carries."""
-    return sorted({t for tags in drills["tags"] for t in tags}, key=str.casefold) if not drills.empty else []
+def format_metric(key, value, per_minute=True):
+    """One place that decides how every figure is written. n/a for a missing
+    value (never a misleading 0); heart rate as a time; HSR and sprint keep
+    two decimals per minute (they're small), one in a projected total."""
+    if value is None or pd.isna(value):
+        return "n/a"
+    if key == "hr90":
+        return format_hr_time(value)
+    decimals = (_PER_MINUTE_DECIMALS if per_minute else _TOTAL_DECIMALS)[key]
+    return f"{value:,.{decimals}f}"
 
 
-def has_all_tags(drill_tags, wanted):
-    return {w.casefold() for w in wanted} <= {t.casefold() for t in drill_tags}
+# ---------------------------------------------------------------- tags
+DEFAULT_TAGS = ["In possession", "Out of possession", "Transition", "Set pieces",
+                "Small-sided game", "Rondo", "Finishing", "Conditioning"]
 
 
+def clean_tags(selected=(), new_text="", known=()):
+    """Combine ticked tags with any typed in (comma separated). Trims spaces,
+    drops blanks and duplicates (ignoring capitalisation), and if a typed tag
+    matches an existing one it takes that tag's capitalisation."""
+    canonical = {str(k).casefold(): str(k) for k in known}
+    items = list(selected or [])
+    if new_text:
+        items += re.split(r"[,;\n]", str(new_text))
+    seen, out = set(), []
+    for item in items:
+        tag = re.sub(r"\s+", " ", str(item)).strip()[:40]
+        key = tag.casefold()
+        if tag and key not in seen:
+            seen.add(key)
+            out.append(canonical.get(key, tag))
+    return out
 
 
-def note_box(kind, text):
-    palette = {"ok": ("#e6f4ea", "#1e6b34"), "long": ("#fff4d6", "#7a5600"),
-               "short": ("#fff4d6", "#7a5600"), "unknown": ("#eef2f7", NAVY)}
-    bg, fg = palette[kind]
-    st.markdown(f"<div style='background:{bg};color:{fg};border-radius:8px;padding:8px 12px;"
-                f"font-size:14px;margin-top:8px'>{escape(text)}</div>", unsafe_allow_html=True)
+def all_tags(drills):
+    """Starter tags first, then any others already used on a saved drill."""
+    used = {t for tags in (drills["tags"] if "tags" in drills else []) for t in (tags or [])}
+    extra = sorted(used - {t for t in DEFAULT_TAGS}, key=str.casefold)
+    return DEFAULT_TAGS + extra
 
 
-# ---------------------------------------------------------------- library view
-def show_library():
-    if drills.empty:
-        st.info("No drills saved yet. Open **Add or edit a drill** to create the first one.")
-        return
+# ---------------------------------------------------------------- drill types (free text, remembered)
+def all_types(drills):
+    """The starter types first, then every other type used on a saved drill.
+    Types differing only by capitalisation count as one (the most used
+    spelling wins), so 'duels' and 'Duels' never both appear."""
+    used = [str(t).strip() for t in (drills["drill_type"] if "drill_type" in drills else []) if str(t).strip()]
+    counts = {}
+    for t in used:
+        counts.setdefault(t.casefold(), {}).setdefault(t, 0)
+        counts[t.casefold()][t] += 1
+    out = list(DRILL_TYPES)
+    seen = {t.casefold() for t in out}
+    extra = []
+    for folded, spellings in counts.items():
+        if folded not in seen:
+            extra.append(sorted(spellings, key=lambda sp: (-spellings[sp], sp))[0])
+    return out + sorted(extra, key=str.casefold)
 
-    visible = drills
-    if tags_in_use():
-        tag_filter = st.multiselect("Filter by tag", tags_in_use(), key="library_tag_filter")
-        if tag_filter:
-            visible = drills[drills["tags"].apply(lambda t: has_all_tags(t, tag_filter))]
-            if visible.empty:
-                st.info("No saved drill has all of those tags.")
-                return
-    chosen = st.selectbox("Drill", list(visible["name"]))
-    drill = drills[drills["name"] == chosen].iloc[0]
-    drill_id = int(drill["drill_id"])
-    linked = list(aliases.loc[aliases["drill_id"] == drill_id, "alias"])
 
-    photo_col, info_col = st.columns([1, 2])
-    with photo_col:
-        photo = load_photo(drill_id, str(drill["updated_at"])) if drill["has_photo"] else None
-        if photo:
-            st.image(photo[0], width="stretch")
-        else:
-            st.markdown("<div style='border:1px dashed #9aa5b5;border-radius:8px;height:160px;display:flex;"
-                        "align-items:center;justify-content:center;color:#6b7686'>No photo yet</div>",
-                        unsafe_allow_html=True)
-    with info_col:
-        st.subheader(drill["name"])
-        chips = [drill["drill_type"]]
-        if pd.notna(drill["pitch_length_m"]) and pd.notna(drill["pitch_width_m"]):
-            chips.append(f"Pitch {drill['pitch_length_m']:.0f} x {drill['pitch_width_m']:.0f} m")
-        if pd.notna(drill["num_players"]):
-            chips.append(f"{drill['num_players']:.0f} players")
-        area = dl.area_per_player(drill["pitch_length_m"], drill["pitch_width_m"], drill["num_players"])
-        if area:
-            chips.append(f"{area:,.0f} m2 per player")
-        if pd.notna(drill["planned_minutes"]):
-            chips.append(f"Planned {drill['planned_minutes']:.0f} min")
-        st.markdown("".join(chip(c) for c in chips) + "".join(chip(t, highlight=True) for t in drill["tags"]),
-                    unsafe_allow_html=True)
-        if drill["notes"]:
-            st.write(drill["notes"])
-        st.caption(f"Linked to {len(linked)} name(s) in the GPS data" if linked
-                   else "Not linked to any GPS drill name yet, so there are no outputs to show.")
+def canonical_type(entered, known=(), default="Team drill"):
+    """Turn whatever was typed into the type to save. A type you've used
+    before always comes back in its existing spelling (so typing 'DUELS'
+    gives 'Duels'); a new one is trimmed and starts with a capital letter."""
+    text = re.sub(r"\s+", " ", str(entered or "")).strip()[:40]
+    if not text:
+        return default
+    for existing in known:
+        if str(existing).casefold() == text.casefold():
+            return str(existing)
+    return text[0].upper() + text[1:]
 
-    if not linked:
-        return
 
-    data = rows[rows["drill_label"].isin(linked)]
-    fit_toggle = st.checkbox("Fit players only", value=True,
-                             help="Leaves out players recorded as injured, modified or international "
-                                  "on the day. Players with no status recorded are kept.")
-    if fit_toggle:
-        data = dl.fit_only(data)
-
-    summary = dl.per_minute_by_position(data)
-    if summary.empty:
-        st.info("No GPS rows found for this drill with the current filter.")
-        return
-
-    st.markdown("### Output per minute")
-    position = st.radio("Position", list(summary["Position"]), horizontal=True, key=f"pos_{drill_id}")
-    row = summary[summary["Position"] == position].iloc[0]
-    players, sessions = int(row["Players"]), int(row["Sessions"])
-    if dl.is_thin(players, sessions):
-        st.warning(dl.thin_message(players, sessions))
-    else:
-        st.caption(f"Based on {players} players across {sessions} sessions, {row['Minutes']:,.0f} player-minutes.")
-    tile_row([tile(f"{label} per min", dl.format_metric(k, row[k]), unit) for k, label, unit in dl.METRICS])
-    if pd.isna(row["hr90"]):
-        st.caption("No heart rate found for this drill. Firstbeat has to record it under the same drill "
-                   "name as the GPS for it to link up.")
-    else:
-        st.caption(f"On average {dl.format_hr_time(row['hr90'])} of every minute was spent above 90% of max HR "
-                   f"(about {row['hr90'] * 100:.0f}% of the drill). Heart rate recorded for "
-                   f"{int(row['HR players'])} of {players} players.")
-
-    with st.expander("All positions"):
-        table = summary[["Position", "Players", "Sessions"]].copy()
-        table["Minutes"] = summary["Minutes"].round(0)
-        table["Data"] = ["Thin" if dl.is_thin(int(p), int(n)) else "" for p, n in zip(summary["Players"], summary["Sessions"])]
-        for k, label, unit in dl.METRICS:
-            table[label + (f" ({unit})" if unit else "") + " / min"] = [dl.format_metric(k, v) for v in summary[k]]
-        st.dataframe(table, width="stretch", hide_index=True)
-
-    st.markdown("### If we run this drill for...")
-    default_minutes = float(drill["planned_minutes"]) if pd.notna(drill["planned_minutes"]) else 10.0
-    minutes = st.number_input("Minutes", min_value=1.0, max_value=120.0, value=default_minutes,
-                              step=1.0, key=f"mins_{drill_id}")
-    projected = dl.project(row, minutes)
-    tile_row([tile(label, dl.format_metric(k, projected[k], per_minute=False), unit)
-              for k, label, unit in dl.METRICS])
-    note_box(*dl.projection_note(minutes, dl.observed_block_minutes(data)))
-    st.caption(f"Per player, for the {position.lower()} group. Assumes the per-minute rate holds for the whole time.")
+def supports_new_options(selectbox_function):
+    """Does this version of Streamlit let a selection box accept a newly typed
+    option? (Added in 2025; older versions fall back to a separate text box.)"""
+    import inspect
+    try:
+        return "accept_new_options" in inspect.signature(selectbox_function).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------- find a drill
-NEW_TYPE_CHOICE = "New type..."      # only used when this Streamlit version cannot take a typed-in option
+def rank_drills(rows, drills, aliases, targets, minutes, position="All outfield",
+                required_tags=(), tolerance_pct=20.0, fit=True):
+    """Which saved drills would give the group the targets, if run for `minutes`?
 
-FINDER_DEFAULTS = {"distance": (1000.0, 100.0), "hsr": (100.0, 10.0), "sprint": (20.0, 5.0),
-                   "accel": (20.0, 5.0), "decel": (20.0, 5.0), "hr90": (2.0, 0.5)}
+    `targets` is {measure key: target}, one or several. Every target is a GROUP
+    AVERAGE: what the average player in the chosen position group would
+    produce -- the output per player-minute actually recorded in the drill,
+    projected to `minutes`.
 
+    A drill is a match only if EVERY measure lands within `tolerance_pct` of
+    its target, and drills are ranked by their worst miss, so one measure
+    far off can't hide behind another that's spot on. A drill with no
+    recorded data for any one of the chosen measures can't be judged, so it
+    is left out and its name is listed in result.attrs['left_out'].
 
-def show_finder():
-    if drills.empty:
-        st.info("No drills saved yet, so there is nothing to search. Add some first.")
-        return
-    st.markdown("Pick one or more measures and a target for each, and it ranks your saved drills by how close each "
-                "would get if you ran it for the minutes you have, using what players actually produced in it.")
-
-    by_label = {label: (key, unit) for key, label, unit in dl.METRICS}
-    c1, c2 = st.columns([2, 1])
-    chosen = c1.multiselect("Measures", list(by_label), default=["Total distance"],
-                            help="Pick more than one to filter by several at once. A drill only counts as a match "
-                                 "if every chosen measure is close to its target.")
-    minutes = c2.number_input("Minutes available", min_value=1.0, max_value=120.0, value=10.0, step=1.0)
-    if not chosen:
-        st.info("Pick at least one measure.")
-        return
-
-    targets = {}
-    target_cols = st.columns(min(len(chosen), 3))
-    for n, label in enumerate(chosen):
-        key, unit = by_label[label]
-        default_target, step = FINDER_DEFAULTS[key]
-        if key == "hr90":
-            target_label = "Target (minutes above 90% HR)" if len(chosen) == 1 else f"{label} target (minutes)"
-        else:
-            what = unit if unit else "count"
-            target_label = f"Target ({what})" if len(chosen) == 1 else f"{label} target ({what})"
-        targets[key] = target_cols[n % len(target_cols)].number_input(
-            target_label, min_value=0.1, value=default_target, step=step, key=f"finder_target_{key}", format="%.1f")
-
-    c4, c5, c6 = st.columns(3)
-    positions = ["All outfield"] + sorted(p for p in rows["position"].dropna().unique())
-    position = c4.selectbox("Position", positions)
-    wanted_tags = c5.multiselect("Drill must have all of these tags", tags_in_use(),
-                                 help="Leave empty to search every drill.")
-    tolerance = c6.slider("Counts as a match within (%)", 5, 50, 20, step=5)
-    fit = st.checkbox("Fit players only", value=True,
-                      help="Leaves out players recorded as injured, modified or international on the day.")
-
-    result = dl.rank_drills(rows, drills, aliases, targets, minutes, position,
-                            required_tags=wanted_tags, tolerance_pct=float(tolerance), fit=fit)
-    left_out = result.attrs.get("left_out", [])
-    many = len(chosen) > 1
-    if result.empty:
-        st.info(f"No saved drill has recorded data for {'all of those measures' if many else 'that measure'}, "
-                "that position and that tag combination.")
-        if left_out and many:
-            st.caption("Left out because they have no recorded data for one of the chosen measures in this group: "
-                       + ", ".join(left_out))
-        return
-
-    matches = int(result["Within range"].sum())
-    st.markdown(f"### {matches} drill{'s' if matches != 1 else ''} within {tolerance}% of "
-                f"{'every target' if many else 'the target'}")
-
-    tail = {"Tags": result["Tags"], "Type": result["Type"], "Players": result["Players"],
-            "Sessions": result["Sessions"], "Data": ["Thin" if t else "" for t in result["Thin"]]}
-    match_col = ["Yes" if ok else "No" for ok in result["Within range"]]
-    if not many:
-        key = next(iter(targets))
-        shown = pd.DataFrame({
-            "Drill": result["Drill"],
-            "Match": match_col,
-            "Per min": [dl.format_metric(key, v) for v in result[f"{key}_rate"]],
-            f"At {minutes:g} min": [dl.format_metric(key, v, per_minute=False) for v in result[f"{key}_projected"]],
-            "Difference": [f"{d:+.0f}%" for d in result[f"{key}_diff"]],
-            "Minutes needed": [f"{m:.1f} min" if pd.notna(m) else "can't reach it" for m in result[f"{key}_needed"]],
-            **tail,
-        })
-        st.caption(f"Closest first. Per player, for the {position.lower()} group. 'Minutes needed' is how long the "
-                   f"drill would have to run to reach the target on its own. 'Thin' means fewer than "
-                   f"{dl.MIN_PLAYERS} players or a single session behind the numbers, so treat it as a record of "
-                   f"that day, not a benchmark.")
-    else:
-        columns = {"Drill": result["Drill"], "Match": match_col,
-                   "Worst miss": [f"{w:.0f}%" if pd.notna(w) else "n/a" for w in result["Worst miss"]]}
-        for key, (label, unit) in {k: (lab, un) for k, lab, un in dl.METRICS if k in targets}.items():
-            suffix = f" {unit}" if unit else ""
-            columns[f"{label} per min"] = [dl.format_metric(key, v) for v in result[f"{key}_rate"]]
-            columns[f"{label} at {minutes:g} min"] = [
-                f"{dl.format_metric(key, v, per_minute=False)}{suffix if key != 'hr90' else ''} ({d:+.0f}%)"
-                for v, d in zip(result[f"{key}_projected"], result[f"{key}_diff"])]
-        shown = pd.DataFrame({**columns, **tail})
-        st.caption(f"Ranked by each drill's worst miss across the chosen measures, so one far-off measure can't hide "
-                   f"behind another that's on target. It's a match only if every measure is within {tolerance}%. "
-                   f"Per player, for the {position.lower()} group. 'Thin' means fewer than {dl.MIN_PLAYERS} players "
-                   f"or a single session behind the numbers, so treat it as a record of that day, not a benchmark.")
-    st.dataframe(shown, width="stretch", hide_index=True)
-    if left_out:
-        st.caption("Left out because they have no recorded data for "
-                   f"{'one of the chosen measures' if many else 'this measure'} in this group: " + ", ".join(left_out))
-
-
-# ---------------------------------------------------------------- add / edit view
-def show_editor():
-    mode = st.radio("What would you like to do?", ["Add a new drill", "Edit an existing drill"], horizontal=True)
-
-    defaults = {"name": "", "drill_type": "Team drill", "pitch_length_m": 0.0, "pitch_width_m": 0.0,
-                "num_players": 0, "planned_minutes": 0.0, "notes": ""}
-    default_aliases, target_id, target_key = [], None, "new"
-    current = None
-
-    all_labels = sorted(rows["drill_label"].dropna().unique()) if not rows.empty else []
-    linked_elsewhere = set(aliases["alias"])
-
-    if mode == "Add a new drill":
-        suggestions = dl.suggest_groups(rows, linked_elsewhere)
-        show_all = st.checkbox("Include warm-ups, tests, goalkeeper and individual sessions", value=False)
-        if not show_all and not suggestions.empty:
-            suggestions = suggestions[suggestions["type"] == "Team drill"]
-        options = ["Start from scratch"] + [
-            f"{r.suggested_name}  ({r.sessions} session{'s' if r.sessions != 1 else ''}, "
-            f"{len(r.labels)} name{'s' if len(r.labels) != 1 else ''})" for r in suggestions.itertuples()]
-        pick = st.selectbox("Start from a drill name found in your data", options,
-                            help="Names are grouped when they only differ by block prefix (B1 -), "
-                                 "BLOCK number or spacing.")
-        if pick != "Start from scratch":
-            sugg = suggestions.iloc[options.index(pick) - 1]
-            defaults["name"], defaults["drill_type"] = sugg["suggested_name"], sugg["type"]
-            default_aliases = list(sugg["labels"])
-            target_key = f"new_{sugg['key']}"
-    else:
-        if drills.empty:
-            st.info("There are no drills to edit yet.")
-            return
-        chosen = st.selectbox("Drill to edit", list(drills["name"]))
-        current = drills[drills["name"] == chosen].iloc[0]
-        target_id = int(current["drill_id"])
-        target_key = f"edit_{target_id}"
-        defaults.update({
-            "name": current["name"], "drill_type": current["drill_type"],
-            "pitch_length_m": 0.0 if pd.isna(current["pitch_length_m"]) else float(current["pitch_length_m"]),
-            "pitch_width_m": 0.0 if pd.isna(current["pitch_width_m"]) else float(current["pitch_width_m"]),
-            "num_players": 0 if pd.isna(current["num_players"]) else int(current["num_players"]),
-            "planned_minutes": 0.0 if pd.isna(current["planned_minutes"]) else float(current["planned_minutes"]),
-            "notes": current["notes"] or "",
-        })
-        default_aliases = list(aliases.loc[aliases["drill_id"] == target_id, "alias"])
-        linked_elsewhere -= set(default_aliases)
-
-    type_options = dl.all_types(drills)
-    defaults["drill_type"] = dl.canonical_type(defaults["drill_type"], known=type_options)   # 'duels' -> 'Duels'
-    if defaults["drill_type"] not in type_options:      # e.g. a type guessed from the data
-        type_options = type_options + [defaults["drill_type"]]
-
-    tag_options = dl.all_tags(drills)
-    current_tags = list(current["tags"]) if current is not None else []
-    tag_options = tag_options + [t for t in current_tags if t not in tag_options]
-
-    available = [a for a in all_labels if a not in linked_elsewhere]
-    for a in default_aliases:                     # keep currently-linked names selectable
-        if a not in available:
-            available.append(a)
-
-    with st.form(f"drill_form_{target_key}"):
-        name = st.text_input("Drill name", value=defaults["name"])
-        if dl.supports_new_options(st.selectbox):
-            typed_type = st.selectbox(
-                "Type", type_options, index=type_options.index(defaults["drill_type"]), accept_new_options=True,
-                help="Start typing to find a type you've used before, or type a new one. Any new type is "
-                     "remembered and offered next time.")
-            new_type_text = ""
-        else:       # older Streamlit: pick from the list, or choose 'New type...' and type it below
-            typed_type = st.selectbox("Type", type_options + [NEW_TYPE_CHOICE],
-                                      index=type_options.index(defaults["drill_type"]))
-            new_type_text = st.text_input("New type", help="Only used if you chose 'New type...' above. "
-                                                           "It's remembered and offered next time.")
-        c1, c2, c3, c4 = st.columns(4)
-        length = c1.number_input("Pitch length (m)", min_value=0.0, value=defaults["pitch_length_m"], step=1.0,
-                                 help="Leave at 0 if not known.")
-        width = c2.number_input("Pitch width (m)", min_value=0.0, value=defaults["pitch_width_m"], step=1.0)
-        players = c3.number_input("Players", min_value=0, value=defaults["num_players"], step=1)
-        planned = c4.number_input("Planned minutes", min_value=0.0, value=defaults["planned_minutes"], step=1.0)
-        notes = st.text_area("Notes", value=defaults["notes"])
-        chosen_tags = st.multiselect("Tags", options=tag_options, default=current_tags,
-                                     help="Tick any that apply, such as In possession or Out of possession.")
-        new_tag_text = st.text_input("Add new tags (separate with commas)", value="",
-                                     help="Anything not in the list above. It will appear in the list from then on.")
-        linked_names = st.multiselect(
-            "Names this drill goes by in the GPS data", options=available, default=default_aliases,
-            help="Every drill label in Catapult that is this drill (block prefixes, BLOCK 1-4, spelling "
-                 "variants). Names already used by another drill aren't listed.")
-        upload = st.file_uploader("Photo or diagram", type=["png", "jpg", "jpeg"])
-        remove_photo = False
-        if current is not None and current["has_photo"]:
-            remove_photo = st.checkbox("Remove the current photo")
-        submitted = st.form_submit_button("Save drill")
-
-    if submitted:
-        entered_type = new_type_text if typed_type == NEW_TYPE_CHOICE else typed_type
-        drill_type = dl.canonical_type(entered_type, known=type_options)
-        try:
-            photo, mime = (drill_db.shrink_photo(upload.getvalue()) if upload is not None else (None, None))
-            conn = drill_db.connect()
-            try:
-                drill_db.save_drill(
-                    conn, target_id,
-                    {"name": name, "drill_type": drill_type, "pitch_length_m": length, "pitch_width_m": width,
-                     "num_players": players, "planned_minutes": planned, "notes": notes,
-                     "tags": dl.clean_tags(chosen_tags, new_tag_text, known=tag_options)},
-                    linked_names, photo=photo, photo_mime=mime, remove_photo=remove_photo)
-            finally:
-                conn.close()
-        except ValueError as exc:
-            st.error(str(exc))
-        else:
-            refresh_everything()
-            st.session_state["flash"] = f"Saved {name.strip()}."
-            st.rerun()
-
-    if target_id is not None:
-        st.divider()
-        confirm = st.checkbox("I want to delete this drill", key=f"del_confirm_{target_id}")
-        if st.button("Delete drill", key=f"del_{target_id}"):
-            if not confirm:
-                st.warning("Tick the box first, then press Delete drill.")
-            else:
-                conn = drill_db.connect()
-                try:
-                    drill_db.delete_drill(conn, target_id)
-                finally:
-                    conn.close()
-                refresh_everything()
-                st.session_state["flash"] = f"Deleted {current['name']}."
-                st.rerun()
-
-
-if view == "Library":
-    show_library()
-elif view == "Find a drill":
-    show_finder()
-else:
-    show_editor()
+    Columns: Drill, Type, Tags, Players, Sessions, Thin, Within range,
+    Worst miss, then for each measure key k: k_rate, k_projected, k_diff
+    (percent), k_needed (minutes the drill alone would need to hit the target)."""
+    keys = list(targets)
+    base = ["Drill", "Type", "Tags", "Players", "Sessions", "Thin", "Within range", "Worst miss"]
+    cols = base + [f"{k}_{part}" for k in keys for part in ("rate", "projected", "diff", "needed")]
+    need = {str(t).casefold() for t in required_tags}
+    out, left_out = [], []
+    for drill in drills.itertuples():
+        tags = list(drill.tags) if isinstance(drill.tags, (list, tuple)) else []
+        if not need <= {t.casefold() for t in tags}:
+            continue
+        linked = set(aliases.loc[aliases["drill_id"] == drill.drill_id, "alias"])
+        data = rows[rows["drill_label"].isin(linked)]
+        if fit:
+            data = fit_only(data)
+        summary = per_minute_by_position(data)
+        sel = summary[summary["Position"] == position]
+        if sel.empty or any(pd.isna(sel.iloc[0][k]) for k in keys):
+            left_out.append(drill.name)
+            continue
+        sel = sel.iloc[0]
+        row = {"Drill": drill.name, "Type": drill.drill_type, "Tags": ", ".join(tags),
+               "Players": int(sel["Players"]), "Sessions": int(sel["Sessions"]),
+               "Thin": is_thin(int(sel["Players"]), int(sel["Sessions"]))}
+        diffs = []
+        for k in keys:
+            rate = float(sel[k])
+            projected = rate * minutes
+            target = targets[k]
+            diff = (projected - target) / target * 100 if target else float("nan")
+            row[f"{k}_rate"], row[f"{k}_projected"], row[f"{k}_diff"] = rate, projected, diff
+            row[f"{k}_needed"] = (target / rate) if rate > 0 else float("nan")
+            diffs.append(diff)
+        judged = all(pd.notna(d) for d in diffs)
+        row["Worst miss"] = max(abs(d) for d in diffs) if judged else float("nan")
+        row["Within range"] = bool(judged and row["Worst miss"] <= tolerance_pct)
+        out.append(row)
+    df = pd.DataFrame(out, columns=cols)
+    if not df.empty:
+        df = df.sort_values(["Worst miss", "Drill"], na_position="last").reset_index(drop=True)
+    df.attrs["left_out"] = left_out
+    return df
