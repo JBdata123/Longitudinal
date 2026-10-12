@@ -26,7 +26,7 @@ METRICS = [
 
 # Bumped whenever the three Drill Library files change together. The page refuses to run if they
 # don't all carry the same number (a half-finished upload), and says which file is out of date.
-LIBRARY_VERSION = 4
+LIBRARY_VERSION = 5
 
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
 
@@ -310,6 +310,48 @@ def all_tags(drills):
     used = {t for tags in (drills["tags"] if "tags" in drills else []) for t in (tags or [])}
     extra = sorted(used - {t for t in DEFAULT_TAGS}, key=str.casefold)
     return DEFAULT_TAGS + extra
+
+
+# ---------------------------------------------------------------- drill types (free text, remembered)
+def all_types(drills):
+    """The starter types first, then every other type used on a saved drill.
+    Types differing only by capitalisation count as one (the most used
+    spelling wins), so 'duels' and 'Duels' never both appear."""
+    used = [str(t).strip() for t in (drills["drill_type"] if "drill_type" in drills else []) if str(t).strip()]
+    counts = {}
+    for t in used:
+        counts.setdefault(t.casefold(), {}).setdefault(t, 0)
+        counts[t.casefold()][t] += 1
+    out = list(DRILL_TYPES)
+    seen = {t.casefold() for t in out}
+    extra = []
+    for folded, spellings in counts.items():
+        if folded not in seen:
+            extra.append(sorted(spellings, key=lambda sp: (-spellings[sp], sp))[0])
+    return out + sorted(extra, key=str.casefold)
+
+
+def canonical_type(entered, known=(), default="Team drill"):
+    """Turn whatever was typed into the type to save. A type you've used
+    before always comes back in its existing spelling (so typing 'DUELS'
+    gives 'Duels'); a new one is trimmed and starts with a capital letter."""
+    text = re.sub(r"\s+", " ", str(entered or "")).strip()[:40]
+    if not text:
+        return default
+    for existing in known:
+        if str(existing).casefold() == text.casefold():
+            return str(existing)
+    return text[0].upper() + text[1:]
+
+
+def supports_new_options(selectbox_function):
+    """Does this version of Streamlit let a selection box accept a newly typed
+    option? (Added in 2025; older versions fall back to a separate text box.)"""
+    import inspect
+    try:
+        return "accept_new_options" in inspect.signature(selectbox_function).parameters
+    except (TypeError, ValueError):
+        return False
 
 
 # ---------------------------------------------------------------- find a drill
