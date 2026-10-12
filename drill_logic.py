@@ -26,7 +26,7 @@ METRICS = [
 
 # Bumped whenever the three Drill Library files change together. The page refuses to run if they
 # don't all carry the same number (a half-finished upload), and says which file is out of date.
-LIBRARY_VERSION = 6
+LIBRARY_VERSION = 7
 LIBRARY_FILE = "drill_logic.py"      # which file this is, so the page can tell if the wrong code was uploaded under this name
 
 DRILL_TYPES = ["Team drill", "Warm-up", "Test / conditioning", "Individual", "GK", "Rehab", "Other"]
@@ -289,11 +289,15 @@ DEFAULT_TAGS = ["In possession", "Out of possession", "Transition", "Set pieces"
 
 
 def clean_tags(selected=(), new_text="", known=()):
-    """Combine ticked tags with any typed in (comma separated). Trims spaces,
-    drops blanks and duplicates (ignoring capitalisation), and if a typed tag
-    matches an existing one it takes that tag's capitalisation."""
+    """Turn what was ticked and/or typed into the tags to save. Anything that
+    contains commas or semicolons is split into separate tags (so pasting
+    'wide play, pressing' works). Trims spaces, drops blanks and duplicates
+    (ignoring capitalisation). A tag you've used before keeps its existing
+    spelling; a brand-new one starts with a capital letter."""
     canonical = {str(k).casefold(): str(k) for k in known}
-    items = list(selected or [])
+    items = []
+    for item in (selected or []):
+        items += re.split(r"[,;\n]", str(item))
     if new_text:
         items += re.split(r"[,;\n]", str(new_text))
     seen, out = set(), []
@@ -302,7 +306,7 @@ def clean_tags(selected=(), new_text="", known=()):
         key = tag.casefold()
         if tag and key not in seen:
             seen.add(key)
-            out.append(canonical.get(key, tag))
+            out.append(canonical.get(key) or (tag[0].upper() + tag[1:]))
     return out
 
 
