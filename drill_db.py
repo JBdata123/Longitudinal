@@ -13,7 +13,8 @@ import psycopg2
 
 # Bumped whenever the three Drill Library files change together. The page refuses to run if they
 # don't all carry the same number (a half-finished upload), and says which file is out of date.
-LIBRARY_VERSION = 5
+LIBRARY_VERSION = 6
+LIBRARY_FILE = "drill_db.py"      # which file this is, so the page can tell if the wrong code was uploaded under this name
 
 TRAINING_ROWS_SQL = """
     select
