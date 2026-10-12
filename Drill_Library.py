@@ -32,16 +32,26 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------------------------------------------------------------- are all three files the same version?
-LIBRARY_VERSION = 4          # keep in step with drill_logic.py and drill_db.py
+# ---------------------------------------------------------------- are all three files the right ones, same version?
+LIBRARY_VERSION = 6          # keep in step with drill_logic.py and drill_db.py
 
-_out_of_date = [name for name, module in (("drill_logic.py", dl), ("drill_db.py", drill_db))
-                if getattr(module, "LIBRARY_VERSION", None) != LIBRARY_VERSION]
-if _out_of_date:
+# For each helper file: what it must say it is, and a few things it must contain. Checking the contents as well
+# catches the wrong code having been uploaded under the right name, which a version number alone can't.
+_EXPECTED = (
+    ("drill_logic.py", dl, ("prepare_rows", "rank_drills", "format_metric", "all_types"), "Drill library calculations"),
+    ("drill_db.py", drill_db, ("connect", "ensure_schema", "fetch_drills", "save_drill"), "Database access for the drill library"),
+)
+_wrong = [(name, starts) for name, module, needed, starts in _EXPECTED
+          if getattr(module, "LIBRARY_FILE", None) != name
+          or getattr(module, "LIBRARY_VERSION", None) != LIBRARY_VERSION
+          or any(not hasattr(module, n) for n in needed)]
+if _wrong:
     st.error("The Drill Library files in your GitHub repo don't match each other. "
-             f"Out of date: {', '.join(_out_of_date)}.")
+             f"Out of date or wrong file: {', '.join(n for n, _ in _wrong)}.")
     st.info("Upload the latest version of all three files together (Drill_Library.py, drill_logic.py and "
-            "drill_db.py), replacing the old ones. Then open Manage app and choose Reboot app.")
+            "drill_db.py), replacing the old ones. Make sure each file goes in under its own name. To check, open "
+            "each one on GitHub: " + "; ".join(f"{n} should start with the words '{starts}'" for n, starts in _wrong) +
+            ". Then open Manage app and choose Reboot app.")
     st.stop()
 
 
@@ -279,6 +289,8 @@ def show_library():
 
 
 # ---------------------------------------------------------------- find a drill
+NEW_TYPE_CHOICE = "New type..."      # only used when this Streamlit version cannot take a typed-in option
+
 FINDER_DEFAULTS = {"distance": (1000.0, 100.0), "hsr": (100.0, 10.0), "sprint": (20.0, 5.0),
                    "accel": (20.0, 5.0), "decel": (20.0, 5.0), "hr90": (2.0, 0.5)}
 
@@ -423,6 +435,11 @@ def show_editor():
         default_aliases = list(aliases.loc[aliases["drill_id"] == target_id, "alias"])
         linked_elsewhere -= set(default_aliases)
 
+    type_options = dl.all_types(drills)
+    defaults["drill_type"] = dl.canonical_type(defaults["drill_type"], known=type_options)   # 'duels' -> 'Duels'
+    if defaults["drill_type"] not in type_options:      # e.g. a type guessed from the data
+        type_options = type_options + [defaults["drill_type"]]
+
     tag_options = dl.all_tags(drills)
     current_tags = list(current["tags"]) if current is not None else []
     tag_options = tag_options + [t for t in current_tags if t not in tag_options]
@@ -434,8 +451,17 @@ def show_editor():
 
     with st.form(f"drill_form_{target_key}"):
         name = st.text_input("Drill name", value=defaults["name"])
-        drill_type = st.selectbox("Type", dl.DRILL_TYPES, index=dl.DRILL_TYPES.index(defaults["drill_type"])
-                                  if defaults["drill_type"] in dl.DRILL_TYPES else 0)
+        if dl.supports_new_options(st.selectbox):
+            typed_type = st.selectbox(
+                "Type", type_options, index=type_options.index(defaults["drill_type"]), accept_new_options=True,
+                help="Start typing to find a type you've used before, or type a new one. Any new type is "
+                     "remembered and offered next time.")
+            new_type_text = ""
+        else:       # older Streamlit: pick from the list, or choose 'New type...' and type it below
+            typed_type = st.selectbox("Type", type_options + [NEW_TYPE_CHOICE],
+                                      index=type_options.index(defaults["drill_type"]))
+            new_type_text = st.text_input("New type", help="Only used if you chose 'New type...' above. "
+                                                           "It's remembered and offered next time.")
         c1, c2, c3, c4 = st.columns(4)
         length = c1.number_input("Pitch length (m)", min_value=0.0, value=defaults["pitch_length_m"], step=1.0,
                                  help="Leave at 0 if not known.")
@@ -458,6 +484,8 @@ def show_editor():
         submitted = st.form_submit_button("Save drill")
 
     if submitted:
+        entered_type = new_type_text if typed_type == NEW_TYPE_CHOICE else typed_type
+        drill_type = dl.canonical_type(entered_type, known=type_options)
         try:
             photo, mime = (drill_db.shrink_photo(upload.getvalue()) if upload is not None else (None, None))
             conn = drill_db.connect()
