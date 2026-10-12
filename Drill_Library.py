@@ -33,7 +33,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------------- are all three files the right ones, same version?
-LIBRARY_VERSION = 6          # keep in step with drill_logic.py and drill_db.py
+LIBRARY_VERSION = 7          # keep in step with drill_logic.py and drill_db.py
 
 # For each helper file: what it must say it is, and a few things it must contain. Checking the contents as well
 # catches the wrong code having been uploaded under the right name, which a version number alone can't.
@@ -469,10 +469,17 @@ def show_editor():
         players = c3.number_input("Players", min_value=0, value=defaults["num_players"], step=1)
         planned = c4.number_input("Planned minutes", min_value=0.0, value=defaults["planned_minutes"], step=1.0)
         notes = st.text_area("Notes", value=defaults["notes"])
-        chosen_tags = st.multiselect("Tags", options=tag_options, default=current_tags,
-                                     help="Tick any that apply, such as In possession or Out of possession.")
-        new_tag_text = st.text_input("Add new tags (separate with commas)", value="",
-                                     help="Anything not in the list above. It will appear in the list from then on.")
+        if dl.supports_new_options(st.multiselect):
+            chosen_tags = st.multiselect(
+                "Tags", options=tag_options, default=current_tags, accept_new_options=True,
+                help="Tick any that apply, or start typing to find a tag you've used before or add a new one "
+                     "(press Enter). New tags are remembered and offered next time.")
+            new_tag_text = ""
+        else:       # older Streamlit: tick from the list, and type any new ones in a separate box
+            chosen_tags = st.multiselect("Tags", options=tag_options, default=current_tags,
+                                         help="Tick any that apply, such as In possession or Out of possession.")
+            new_tag_text = st.text_input("Add new tags (separate with commas)", value="",
+                                         help="Anything not in the list above. It will appear in the list from then on.")
         linked_names = st.multiselect(
             "Names this drill goes by in the GPS data", options=available, default=default_aliases,
             help="Every drill label in Catapult that is this drill (block prefixes, BLOCK 1-4, spelling "
