@@ -5,6 +5,7 @@ panel, bold white values printed directly on/inside the bars, a dedicated
 row of small white ACWR/TE boxes floating above the bars, LCFC brand
 colours throughout.
 """
+import re
 import pandas as pd
 import plotly.graph_objects as go
 from theme import (NAVY, GOLD, RED, GREEN, GREY, DARK_GOLD, WHITE, FONT, base_layout,
@@ -421,8 +422,89 @@ def chart_weekly_max_velocity(gps_full_history: pd.DataFrame, avg_value=None,
     return fig
 
 
+# ---------------------------------------------------------------- Match-minute reference lines
+# A Day label counts as a match if it contains "GAME", or "MD" on its own.
+# "MD-1" / "MD+1" style labels (the days either side of a match) are NOT matches.
+_MATCH_DAY_RE = re.compile(r"GAME|\bMD\b(?!\s*[+-]\s*\d)", re.IGNORECASE)
+
+
+def is_match_day(day_series):
+    """Boolean Series: True where the Day label marks a matchday."""
+    return day_series.astype(str).str.contains(_MATCH_DAY_RE)
+
+
+def parse_match_minutes(text):
+    """'30, 45 90' -> [30.0, 45.0, 90.0] (sorted, de-duplicated, positives only)."""
+    out = set()
+    for part in re.split(r"[,;\s]+", str(text or "").strip()):
+        try:
+            v = float(part)
+        except ValueError:
+            continue
+        if v > 0:
+            out.add(v)
+    return sorted(out)
+
+
+def _duration_minutes(series):
+    """Total Duration -> minutes. Handles clock-style values (hh:mm:ss, times,
+    Timedeltas) and plain numbers (if the numbers are large, e.g. 2700, they
+    are treated as seconds; small ones, e.g. 45, as minutes)."""
+    if pd.api.types.is_numeric_dtype(series):
+        vals = pd.to_numeric(series, errors="coerce").fillna(0)
+        positive = vals[vals > 0]
+        if len(positive):
+            if positive.max() < 1.5:        # Excel time stored as fraction of a day
+                vals = vals * 1440
+            elif positive.median() > 200:   # seconds
+                vals = vals / 60
+        return vals
+    return series.apply(_to_minutes)
+
+
+def match_rate_per_min(periods_df, cols):
+    """Per-minute rate of the summed `cols`, pooled over a player's matchday
+    1st/2nd-half period rows (warm-up already excluded):
+    total of the metric across both halves / total of the halves' Total Duration.
+    Returns None if there is no usable data."""
+    if periods_df is None or periods_df.empty:
+        return None
+    needed = ["Total Duration"] + list(cols)
+    if any(c not in periods_df.columns for c in needed):
+        return None
+    mins = _duration_minutes(periods_df["Total Duration"])
+    valid = mins > 0
+    if not valid.any():
+        return None
+    minutes = mins[valid].sum()
+    total = 0.0
+    for c in cols:
+        total += pd.to_numeric(periods_df[c], errors="coerce").fillna(0)[valid].sum()
+    return float(total / minutes)
+
+
+def match_lines(rate, minutes):
+    """[(minutes, predicted value)] for each requested match length."""
+    if rate is None or not minutes:
+        return []
+    return [(m, rate * m) for m in minutes]
+
+
+def add_match_lines(fig, lines, color, prefix="", position="top left"):
+    """Dotted horizontal reference line per requested match length."""
+    for mins, val in (lines or []):
+        fig.add_hline(
+            y=val, line_dash="dot", line_color=color, line_width=1.5,
+            annotation_text=f"{prefix}{mins:g} min: {val:.0f}",
+            annotation_position=position,
+            annotation_font=dict(family=FONT, size=10, color=WHITE),
+        )
+    return fig
+
+
 # ---------------------------------------------------------------- Chart 1
-def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go.Figure:
+def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
+                          match_lines=None) -> go.Figure:
     x = _x_labels(gps_player)
     has_dist = gps_player["Total Distance"].notna()
     has_mpm = gps_player["Meterage Per Minute"].notna()
@@ -444,6 +526,8 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
     fig.update_layout(bargap=bargap)
     fig = base_layout(fig, n_dates=len(x))
     max_dist = dist.max() if len(dist) else 0
+    if match_lines:
+        max_dist = max(max_dist, max(v for _, v in match_lines))
     max_mpm = mpm.max() if len(mpm) else 0
     if pd.isna(max_mpm):
         max_mpm = 0
@@ -452,6 +536,7 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
         yaxis=dict(visible=False, range=dist_range),
         yaxis2=dict(overlaying="y", side="right", visible=False, range=mpm_range),
     )
+    add_match_lines(fig, match_lines, GOLD)
     hist = gps_full_history.copy()
     acwr_vals = _acwr_for_dates(hist, "Total Distance", gps_player["Date"])
     for xi, v in zip(x, acwr_vals):
@@ -513,7 +598,8 @@ def chart_max_speed(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) ->
 
 
 # ---------------------------------------------------------------- Chart 2 (HSR + SD, stacked)
-def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go.Figure:
+def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
+                 match_lines=None) -> go.Figure:
     x = _x_labels(gps_player)
     has_hsr = gps_player["Velocity Band 4 Total Distance"].notna() | gps_player["Velocity Band 5 Total Distance"].notna()
     has_sd = gps_player["SD"].notna()
@@ -538,13 +624,18 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame) -> go
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
     fig = base_layout(fig, n_dates=len(x))
     top = (hsr + sd)
-    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
+    top_max = top.max() if len(top) else 0
+    if match_lines:
+        top_max = max(top_max, max(v for _, v in match_lines))
+    fig = _apply_value_row(fig, x, acwr_vals, top_max, color_fn=acwr_box_color)
+    add_match_lines(fig, match_lines, GOLD)
     return fig
 
 
 # ---------------------------------------------------------------- Chart 3 / 4 (Accel / Decel, clustered)
 def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
-                       accel_col: str, decel_col: str) -> go.Figure:
+                       accel_col: str, decel_col: str,
+                       accel_lines=None, decel_lines=None) -> go.Figure:
     x = _x_labels(gps_player)
     has_accel = gps_player[accel_col].notna()
     has_decel = gps_player[decel_col].notna()
@@ -566,7 +657,13 @@ def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
     acwr_vals = _acwr_for_dates(hist, "combo", gps_player["Date"])
     fig = base_layout(fig, n_dates=len(x))
     top = pd.concat([accel, decel], axis=1).max(axis=1)
-    fig = _apply_value_row(fig, x, acwr_vals, top.max() if len(top) else 0, color_fn=acwr_box_color)
+    top_max = top.max() if len(top) else 0
+    for ln in (accel_lines, decel_lines):
+        if ln:
+            top_max = max(top_max, max(v for _, v in ln))
+    fig = _apply_value_row(fig, x, acwr_vals, top_max, color_fn=acwr_box_color)
+    add_match_lines(fig, accel_lines, GREEN, prefix="Acc ", position="top left")
+    add_match_lines(fig, decel_lines, RED, prefix="Dec ", position="bottom left")
     return fig
 
 
