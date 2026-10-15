@@ -111,7 +111,7 @@ if "cache_buster" not in st.session_state:
 
 # ---------------------------------------------------------------- load data
 try:
-    gps_day, fb_day = load_data(st.session_state.cache_buster)
+    gps_day, fb_day, gps_periods = load_data(st.session_state.cache_buster)
 except Exception as e:
     st.error(f"Couldn't load data from Dropbox: {e}")
     st.info("Check .streamlit/secrets.toml has valid Dropbox credentials and file paths.")
@@ -306,17 +306,53 @@ with wk6:
         legend_items=charts.LEGEND_WEEKLY_MAX_VEL,
     )
 
+# ---------------------------------------------------------------- match-minute reference lines
+mm_col, _spacer = st.columns([2, 5])
+with mm_col:
+    minutes_text = st.text_input(
+        "Match-minute reference lines (comma separated, e.g. 30, 45, 90)",
+        value="45, 90", key="match_minutes_input",
+    )
+match_minutes = charts.parse_match_minutes(minutes_text)
+
+# Matchday = Day label containing "GAME" or "MD" (not MD-1 / MD+1). Rates use
+# only that player's matchday 1st-half / 2nd-half rows (warm-up is excluded in
+# data_loader), pooled: total of the metric / total of Total Duration.
+md_dates = set(gps_player_full.loc[charts.is_match_day(gps_player_full["Day"]), "Date"])
+player_periods = gps_periods[gps_periods["Player Name"] == player]
+periods_md = player_periods[
+    charts.is_match_day(player_periods["Day"]) | player_periods["Date"].isin(md_dates)
+]
+
+rate_td = charts.match_rate_per_min(periods_md, ["Total Distance"])
+rate_hsr_sd = charts.match_rate_per_min(
+    periods_md, ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"])
+rate_acc_13 = charts.match_rate_per_min(periods_md, ["Acceleration B1-3 Total Efforts (Gen 2)"])
+rate_dec_13 = charts.match_rate_per_min(periods_md, ["Deceleration B1-3 Total Efforts (Gen 2)"])
+rate_acc_23 = charts.match_rate_per_min(periods_md, ["Acceleration B2-3 Total Efforts (Gen 2)"])
+rate_dec_23 = charts.match_rate_per_min(periods_md, ["Deceleration B2-3 Total Efforts (Gen 2)"])
+
+lines_td = charts.match_lines(rate_td, match_minutes)
+lines_hsr_sd = charts.match_lines(rate_hsr_sd, match_minutes)
+lines_acc_13 = charts.match_lines(rate_acc_13, match_minutes)
+lines_dec_13 = charts.match_lines(rate_dec_13, match_minutes)
+lines_acc_23 = charts.match_lines(rate_acc_23, match_minutes)
+lines_dec_23 = charts.match_lines(rate_dec_23, match_minutes)
+
+if match_minutes and rate_td is None:
+    st.caption("No matchday (MD) 1st/2nd-half data found for this player, so no match-minute lines are shown.")
+
 # ---------------------------------------------------------------- daily charts
 render_panel(
     "Total Distance | Metres per Minute",
-    charts.chart_total_distance(gps_player_display, gps_player_full),
+    charts.chart_total_distance(gps_player_display, gps_player_full, match_lines=lines_td),
     key="chart_total_distance",
     legend_items=charts.LEGEND_TOTAL_DISTANCE,
     box_note="ACWR",
 )
 render_panel(
     "HSR (Velocity Band 4 + 5) | Sprint Distance",
-    charts.chart_hsr_sd(gps_player_display, gps_player_full),
+    charts.chart_hsr_sd(gps_player_display, gps_player_full, match_lines=lines_hsr_sd),
     key="chart_hsr_sd",
     legend_items=charts.LEGEND_HSR_SD,
     box_note="ACWR",
@@ -326,6 +362,7 @@ render_panel(
     charts.chart_accel_decel(
         gps_player_display, gps_player_full,
         "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+        accel_lines=lines_acc_13, decel_lines=lines_dec_13,
     ),
     key="chart_accel_decel_13",
     legend_items=charts.legend_accel_decel("1-3"),
@@ -336,6 +373,7 @@ render_panel(
     charts.chart_accel_decel(
         gps_player_display, gps_player_full,
         "Acceleration B2-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
+        accel_lines=lines_acc_23, decel_lines=lines_dec_23,
     ),
     key="chart_accel_decel_23",
     legend_items=charts.legend_accel_decel("2-3"),
