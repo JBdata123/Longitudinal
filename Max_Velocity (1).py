@@ -7,9 +7,10 @@ Optimal / High volume). It follows the Power BI "Squad Sprint Exposure Table".
 
   * Days are counted from TODAY'S DATE on the computer (UK time), every time the
     page loads. There is nothing to pick or update.
-  * The squad list is the `players` table in Supabase, and ONLY those players appear.
-    Anyone in the GPS file who isn't on that list is left out (and named at the bottom
-    of the page, so a misspelt name can't hide a squad member).
+  * The squad list is the `players` table in Supabase, and ONLY those players appear,
+    outfield players only: anyone whose position is "Goalkeeper" is left out. Anyone in
+    the GPS file who isn't on the list is left out too (and named at the bottom of the
+    page, so a misspelt name can't hide a squad member).
   * A "hit" is a SESSION where the player's top speed was 90%+ of their profile
     max velocity (Maximum Velocity / Profile Max Velocity).
 
@@ -159,18 +160,32 @@ def load_squad():
 # ============================================================================
 # THE CALCULATIONS
 # ============================================================================
-def squad_names(squad, include_goalkeepers=True):
-    """The squad list: the names in the players table (and nobody else). Goalkeepers can be left out with the tick box."""
+def _listed(squad):
+    """Everyone on the players table, with names tidied: the name and position, one row per player."""
     sq = squad[squad["player_name"].notna()].copy()
     sq["player"] = sq["player_name"].map(clean_name)
     sq = sq[~sq["player"].str.casefold().isin(["", "nan", "none"])]
-    if not include_goalkeepers:
-        position = sq["position"].fillna("").astype(str).str.strip().str.casefold()
-        sq = sq[position != "goalkeeper"]
+    sq["is_gk"] = sq["position"].fillna("").astype(str).str.strip().str.casefold() == "goalkeeper"
+    return sq
+
+
+def _names(sq):
     names = {}
     for name in sq["player"]:
         names.setdefault(name_key(name), name)
     return sorted(names.values(), key=str.casefold)
+
+
+def listed_names(squad):
+    """Everyone on the players table, goalkeepers included. Used only to tell who is NOT on the list at all."""
+    return _names(_listed(squad))
+
+
+def squad_names(squad):
+    """The squad list shown on the page: the players table, outfield players only. A goalkeeper is anyone whose
+    position is "Goalkeeper"."""
+    sq = _listed(squad)
+    return _names(sq[~sq["is_gk"]])
 
 
 def session_rows(gps):
@@ -334,15 +349,13 @@ def main():
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st.columns([2, 2, 3])
+    c1, c2 = st.columns([2, 5])
     with c1:
         if st.button("Refresh data now"):
             load_gps.clear()
             load_squad.clear()
             st.rerun()
     with c2:
-        include_gk = st.checkbox("Include goalkeepers", value=True)
-    with c3:
         sort_by = st.selectbox("Sort by", SORT_OPTIONS, label_visibility="collapsed")
 
     try:
@@ -359,11 +372,14 @@ def main():
         st.stop()
 
     today = today_uk()                                   # the computer's date, UK time, on every load
-    all_names = squad_names(squad, include_goalkeepers=True)
+    all_names = listed_names(squad)
     if not all_names:
         st.info("The squad list is empty. Add players to the players table in Supabase and they'll appear here.")
         st.stop()
-    names = squad_names(squad, include_goalkeepers=include_gk)
+    names = squad_names(squad)
+    if not names:
+        st.info("Everyone on the squad list is a goalkeeper, so there are no outfield players to show.")
+        st.stop()
     rows, unreadable = session_rows(gps)
     table = sort_table(build_table(names, rows, today), sort_by)
 
@@ -372,8 +388,8 @@ def main():
     counts = {key: int((table["status"] == key).sum()) for key in STATUS}
     st.caption("  |  ".join(f"{STATUS[key][0]}: {counts[key]}" for key in ("under", "optimal", "high", "nodata")))
     st.caption(
-        f"Counted from today ({today.strftime('%d/%m/%Y')}), updating by itself. Only the {len(names)} players on your "
-        f"squad list (the players table in Supabase) are shown. A hit is a SESSION where the player's top speed "
+        f"Counted from today ({today.strftime('%d/%m/%Y')}), updating by itself. Only the {len(names)} outfield players "
+        f"on your squad list (the players table in Supabase) are shown; goalkeepers are left out. A hit is a SESSION where the player's top speed "
         f"reached {THRESHOLD_PCT:g}% or more of their profile max velocity. Days since is today minus the last hit. "
         f"Last {WINDOW_DAYS} days counts the hits from the past {WINDOW_DAYS} days, today included. Hasn't been exposed "
         f"means never, or {STALE_DAYS}+ days since. High volume is {HIGH_VOLUME_COUNT}+ hits in the window. Last reached "
