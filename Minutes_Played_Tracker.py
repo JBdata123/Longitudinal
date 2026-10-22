@@ -6,7 +6,7 @@ Two views, switched with the buttons at the top:
   * Match minutes     -- minutes played in each game (colour-coded), as before.
   * Training minutes  -- minutes trained so far this season: every training session,
                          i.e. every day that is NOT a match day (MD). One column per GPS
-                         week, plus a Total and the number of days trained. No colours.
+                         week, plus a Total. No colours.
 
 Pulls everything directly from Supabase (not Dropbox) -- match-day period
 parsing, opponent info, and scores all already live correctly there from
@@ -224,7 +224,6 @@ def show_training_minutes():
     pivot = filtered.pivot_table(index="player", columns="week_label", values="minutes", aggfunc="sum")
     pivot = pivot.reindex(columns=week_columns)
     pivot["Total"] = pivot.sum(axis=1)
-    pivot["Days trained"] = filtered.groupby("player")["session_date"].nunique()
     pivot = pivot.sort_index()
 
     # No colour banding on training minutes -- just the numbers.
@@ -237,7 +236,7 @@ def show_training_minutes():
     last_day = filtered["session_date"].max().strftime("%d/%m/%Y")
     st.caption(
         f"Training minutes from {first_day} to {last_day}: each player's whole time on the pitch in every session "
-        f"that isn't a match day (MD). Days trained counts the days with any training. Goalkeepers aren't included."
+        f"that isn't a match day (MD). Goalkeepers aren't included."
     )
 
 
