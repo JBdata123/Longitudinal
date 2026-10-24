@@ -9,6 +9,8 @@ minutes would come to.
 Needs: migration_add_drill_library.sql run once in Supabase, and
 [supabase] db_url in the Streamlit secrets (same as the Minutes Played page).
 """
+import hashlib
+import inspect
 from datetime import datetime
 from html import escape
 from zoneinfo import ZoneInfo
@@ -191,21 +193,11 @@ def note_box(kind, text):
 
 
 # ---------------------------------------------------------------- library view
-def show_library():
-    if drills.empty:
-        st.info("No drills saved yet. Open **Add or edit a drill** to create the first one.")
-        return
-
-    visible = drills
-    if tags_in_use():
-        tag_filter = st.multiselect("Filter by tag", tags_in_use(), key="library_tag_filter")
-        if tag_filter:
-            visible = drills[drills["tags"].apply(lambda t: has_all_tags(t, tag_filter))]
-            if visible.empty:
-                st.info("No saved drill has all of those tags.")
-                return
-    chosen = st.selectbox("Drill", list(visible["name"]))
-    drill = drills[drills["name"] == chosen].iloc[0]
+def render_drill(drill, key_prefix="lib", fit=None, default_position=None, default_minutes=None):
+    """Everything about one saved drill: photo, details, tags, notes, output per minute by position, and what a
+    number of minutes would come to. Shared by the Library view and by a row clicked in Find a drill.
+    fit: True/False to use that setting (and hide the tick box), or None to show the tick box.
+    default_position / default_minutes: where the position choice and the minutes box start."""
     drill_id = int(drill["drill_id"])
     linked = list(aliases.loc[aliases["drill_id"] == drill_id, "alias"])
 
@@ -241,10 +233,11 @@ def show_library():
         return
 
     data = rows[rows["drill_label"].isin(linked)]
-    fit_toggle = st.checkbox("Fit players only", value=True,
-                             help="Leaves out players recorded as injured, modified or international "
-                                  "on the day. Players with no status recorded are kept.")
-    if fit_toggle:
+    if fit is None:
+        fit = st.checkbox("Fit players only", value=True, key=f"{key_prefix}_fit",
+                          help="Leaves out players recorded as injured, modified or international "
+                               "on the day. Players with no status recorded are kept.")
+    if fit:
         data = dl.fit_only(data)
 
     summary = dl.per_minute_by_position(data)
@@ -253,7 +246,9 @@ def show_library():
         return
 
     st.markdown("### Output per minute")
-    position = st.radio("Position", list(summary["Position"]), horizontal=True, key=f"pos_{drill_id}")
+    positions = list(summary["Position"])
+    start = positions.index(default_position) if default_position in positions else 0
+    position = st.radio("Position", positions, index=start, horizontal=True, key=f"{key_prefix}_pos_{drill_id}")
     row = summary[summary["Position"] == position].iloc[0]
     players, sessions = int(row["Players"]), int(row["Sessions"])
     if dl.is_thin(players, sessions):
@@ -278,9 +273,10 @@ def show_library():
         st.dataframe(table, width="stretch", hide_index=True)
 
     st.markdown("### If we run this drill for...")
-    default_minutes = float(drill["planned_minutes"]) if pd.notna(drill["planned_minutes"]) else 10.0
-    minutes = st.number_input("Minutes", min_value=1.0, max_value=120.0, value=default_minutes,
-                              step=1.0, key=f"mins_{drill_id}")
+    if default_minutes is None:
+        default_minutes = float(drill["planned_minutes"]) if pd.notna(drill["planned_minutes"]) else 10.0
+    minutes = st.number_input("Minutes", min_value=1.0, max_value=120.0, value=float(default_minutes),
+                              step=1.0, key=f"{key_prefix}_mins_{drill_id}")
     projected = dl.project(row, minutes)
     tile_row([tile(label, dl.format_metric(k, projected[k], per_minute=False), unit)
               for k, label, unit in dl.METRICS])
@@ -288,7 +284,36 @@ def show_library():
     st.caption(f"Per player, for the {position.lower()} group. Assumes the per-minute rate holds for the whole time.")
 
 
+def show_library():
+    if drills.empty:
+        st.info("No drills saved yet. Open **Add or edit a drill** to create the first one.")
+        return
+
+    visible = drills
+    if tags_in_use():
+        tag_filter = st.multiselect("Filter by tag", tags_in_use(), key="library_tag_filter")
+        if tag_filter:
+            visible = drills[drills["tags"].apply(lambda t: has_all_tags(t, tag_filter))]
+            if visible.empty:
+                st.info("No saved drill has all of those tags.")
+                return
+    chosen = st.selectbox("Drill", list(visible["name"]))
+    drill = drills[drills["name"] == chosen].iloc[0]
+    render_drill(drill)
+
+
 # ---------------------------------------------------------------- find a drill
+def selected_rows(event):
+    """The row numbers clicked in a table, however this Streamlit version hands them back."""
+    try:
+        return list(event.selection.rows)
+    except AttributeError:
+        try:
+            return list(event["selection"]["rows"])
+        except (KeyError, TypeError):
+            return []
+
+
 NEW_TYPE_CHOICE = "New type..."      # only used when this Streamlit version cannot take a typed-in option
 
 FINDER_DEFAULTS = {"distance": (1000.0, 100.0), "hsr": (100.0, 10.0), "sprint": (20.0, 5.0),
@@ -382,10 +407,47 @@ def show_finder():
                    f"behind another that's on target. It's a match only if every measure is within {tolerance}%. "
                    f"Per player, for the {position.lower()} group. 'Thin' means fewer than {dl.MIN_PLAYERS} players "
                    f"or a single session behind the numbers, so treat it as a record of that day, not a benchmark.")
-    st.dataframe(shown, width="stretch", hide_index=True)
+    # Click a row to see that drill's details underneath. (A very old Streamlit can't do row clicks, so it gets a
+    # "Show details for" list instead.) The table's ID includes the list of drills it shows, so when a new search
+    # gives a different list, an old click can't end up pointing at a different drill.
+    names = list(result["Drill"])
+    can_click = "on_select" in inspect.signature(st.dataframe).parameters
+    picked = None
+    if can_click:
+        table_key = "finder_table_" + hashlib.md5("|".join(names).encode()).hexdigest()[:8]
+        event = st.dataframe(shown, width="stretch", hide_index=True, on_select="rerun",
+                             selection_mode="single-row", key=table_key)
+        clicked = selected_rows(event)
+        picked = names[clicked[0]] if clicked and clicked[0] < len(names) else None
+    else:
+        st.dataframe(shown, width="stretch", hide_index=True)
+        choice = st.selectbox("Show details for", ["(none)"] + names, key="finder_pick")
+        picked = None if choice == "(none)" else choice
     if left_out:
         st.caption("Left out because they have no recorded data for "
                    f"{'one of the chosen measures' if many else 'this measure'} in this group: " + ", ".join(left_out))
+
+    if picked is None:
+        if can_click:
+            st.caption("Click a drill in the table to see its details.")
+        return
+
+    # ---- the clicked drill: how it matched this search, then its full details, starting on the same settings
+    hit = result[result["Drill"] == picked].iloc[0]
+    st.markdown("### Selected drill")
+    lines = []
+    for key, label, unit in dl.METRICS:
+        if key in targets:
+            suffix = f" {unit}" if unit and key != "hr90" else ""
+            lines.append(f"**{label}:** you wanted {dl.format_metric(key, targets[key], per_minute=False)}{suffix}, "
+                         f"this drill gives {dl.format_metric(key, hit[f'{key}_projected'], per_minute=False)}{suffix} "
+                         f"in {minutes:g} min ({hit[f'{key}_diff']:+.0f}%)")
+    verdict = f"**{'A match' if hit['Within range'] else 'Not a match'}** within {tolerance}%"
+    if not many and pd.notna(hit[f"{next(iter(targets))}_needed"]):
+        verdict += f". On its own it would need {hit[f'{next(iter(targets))}_needed']:.1f} min to reach the target"
+    st.markdown("  \n".join(lines + [verdict]))
+    render_drill(drills[drills["name"] == picked].iloc[0], key_prefix="find", fit=fit,
+                 default_position=position, default_minutes=minutes)
 
 
 # ---------------------------------------------------------------- add / edit view
