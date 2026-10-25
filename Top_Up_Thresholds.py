@@ -1,21 +1,22 @@
 """
 Top-Up Thresholds -- one file.
 
-After a game, shows how far each player is from their AVERAGE WEEK for total distance
-and high speed running, and gives you a CSV in exactly the layout of your Catapult
-athlete thresholds file, ready to import:
+Works out what each player still needs ON MATCH DAY to reach their AVERAGE WEEK for total
+distance and high speed running, and produces the CSV for you in exactly the layout of your
+Catapult athlete thresholds file, ready to import:
 
     Athlete ID, Athlete Name, Position, Total Distance, High Speed Distance
 
-The numbers
-  * The week is worked out by itself: the latest week in the GPS data (you can pick another).
-  * A player's "average week" is the average of their own weekly totals over the earlier
-    weeks, using the same rules as your Power BI weekly report: SESSION rows only, Fit
-    players only, in-season weeks only (week 1 up), week 19's test data left out, and only
-    weeks where that player took part in every session the squad had (a part-week would
-    drag the average down).
-  * "This week so far" is their total for the selected week up to now.
-  * "Still to do" = average week minus this week so far (blank if they've already reached it).
+How it decides
+  * The cut-off is the most recent MD-1 day in the GPS data (worked out by itself; you can pick an
+    earlier one). Everything up to and including MD-1 counts as done. Match day and anything after
+    it does not.
+  * The week is the week that MD-1 is in.
+  * A player's "average week" is the average of their own weekly totals over the earlier weeks,
+    using the same rules as your Power BI weekly report: SESSION rows only, Fit players only,
+    in-season weeks only (week 1 up), week 19's test data left out, and only weeks where that
+    player took part in every session the squad had (a part-week would drag the average down).
+  * "Still to do" = average week minus what they'd done by MD-1 (blank if they're already there).
   * High speed running = velocity band 4 + band 5 distance, as everywhere else in your reports.
 
 Your athlete list (ID, name, position as Catapult writes them) comes from your own Catapult
@@ -48,7 +49,7 @@ CACHE_TTL_SECONDS = 60
 
 OUT_COLUMNS = ["Athlete ID", "Athlete Name", "Position", "Total Distance", "High Speed Distance"]
 REQUIRED_COLUMNS = ["Athlete ID", "Athlete Name", "Position"]
-MODE_STILL = "Still to do this week (the top-up)"
+MODE_STILL = "What they still need on match day (to reach their average week)"
 MODE_AVERAGE = "Their full average week"
 
 CREATE_ROSTER_SQL = """
@@ -126,11 +127,12 @@ def _fit_rows(d):
     return d[status.isna() | (status == "") | (status == "fit")]       # no status recorded counts as available
 
 
-def weekly_totals(rows, today, fit_only=True):
-    """One row per player per week: how many SESSIONs, and the total distance and high speed distance."""
+def weekly_totals(rows, through, fit_only=True):
+    """One row per player per week: how many SESSIONs, and the total distance and high speed distance,
+    counting sessions up to and including the day `through`."""
     d = rows.copy()
     d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
-    d = d[pd.Series([x is not None and x <= today for x in d["session_date"]], index=d.index, dtype=bool)]
+    d = d[pd.Series([x is not None and x <= through for x in d["session_date"]], index=d.index, dtype=bool)]
     d["week"] = pd.to_numeric(d["week"], errors="coerce")
     d["total_distance"] = pd.to_numeric(d["total_distance"], errors="coerce")
     d["hsr"] = pd.to_numeric(d["hsr"], errors="coerce")
@@ -148,30 +150,37 @@ def weekly_totals(rows, today, fit_only=True):
     return weekly
 
 
-def latest_week(rows, today, exclude_weeks=EXCLUDE_WEEKS):
-    """The in-season week of the most recent session up to today, or None."""
+def _is_md_minus_one(label):
+    """True for MD-1 however it's been typed (md-1, MD -1, ' MD-1 ')."""
+    return re.sub(r"\s+", "", str(label or "")).upper() == "MD-1"
+
+
+def md_minus_one_dates(rows, today):
+    """Every MD-1 day in the data up to today, newest first."""
     d = rows.copy()
     d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
-    d["week"] = pd.to_numeric(d["week"], errors="coerce")
-    d = d[pd.Series([x is not None and x <= today for x in d["session_date"]], index=d.index, dtype=bool)]
-    d = d[(d["week"] > 0) & (~d["week"].isin(exclude_weeks))].dropna(subset=["week"])
-    if d.empty:
-        return None
-    return int(d.loc[d["session_date"].idxmax(), "week"])
+    d = d[d["day"].map(_is_md_minus_one)]
+    return sorted({x for x in d["session_date"] if x is not None and x <= today}, reverse=True)
 
 
-def available_weeks(rows, today, exclude_weeks=EXCLUDE_WEEKS):
+def week_of(rows, day):
+    """The GPS week number of a day (the most common one, if the rows that day disagree), or None."""
     d = rows.copy()
     d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
-    d["week"] = pd.to_numeric(d["week"], errors="coerce")
-    d = d[pd.Series([x is not None and x <= today for x in d["session_date"]], index=d.index, dtype=bool)]
-    d = d[(d["week"] > 0) & (~d["week"].isin(exclude_weeks))].dropna(subset=["week"])
-    return sorted({int(w) for w in d["week"]}, reverse=True)
+    weeks = pd.to_numeric(d.loc[d["session_date"] == day, "week"], errors="coerce").dropna()
+    return None if weeks.empty else int(weeks.mode().min())
 
 
-def week_summary(rows, week, today, exclude_weeks=EXCLUDE_WEEKS, fit_only=True):
-    """Per player (keyed by person_key): their average week, this week so far, and what's still to do."""
-    weekly = weekly_totals(rows, today, fit_only=fit_only)
+def latest_session_day(rows, today):
+    """The most recent day with a session, up to today, or None."""
+    days = [x for x in pd.to_datetime(rows["session_date"]).dt.date if x is not None and x <= today]
+    return max(days) if days else None
+
+
+def week_summary(rows, week, through, exclude_weeks=EXCLUDE_WEEKS, fit_only=True):
+    """Per player (keyed by person_key): their average week, this week's total up to and including the day
+    `through` (MD-1), and what's still to do."""
+    weekly = weekly_totals(rows, through, fit_only=fit_only)
     history = weekly[(weekly["week"] > 0) & (weekly["week"] < week) & (~weekly["week"].isin(exclude_weeks))
                      & weekly["full_week"]]
     average = history.groupby("key").agg(avg_td=("td", "mean"), avg_hsr=("hsr", "mean"), weeks_used=("week", "nunique"))
@@ -207,7 +216,7 @@ def build_table(roster, summary, mode=MODE_STILL):
             rows.append({**base, "note": "Goalkeeper - left blank"})
             continue
         if key not in summary.index:
-            rows.append({**base, "note": "No Fit session this week (or name not found in the GPS data)"})
+            rows.append({**base, "note": "No Fit session this week up to MD-1 (or name not found in the GPS data)"})
             continue
         s = summary.loc[key]
         base.update({"sessions": int(s["sessions_this_week"]), "weeks_used": int(s["weeks_used"]),
@@ -222,7 +231,7 @@ def build_table(roster, summary, mode=MODE_STILL):
         if mode == MODE_STILL and td is None and hsr is None:
             note = "Already at their average week"
         elif mode == MODE_STILL:
-            note = "Top-up needed"
+            note = "Needs this on match day"
         else:
             note = "Average week"
         rows.append({**base, "note": note})
@@ -243,7 +252,7 @@ def connect():
 
 # SESSION rows only. High speed running = velocity band 4 + band 5 distance (blank only if both are blank).
 SESSIONS_SQL = """
-    select player, session_date, gps_week_number as week, player_status as status,
+    select player, session_date, gps_week_number as week, gps_day as day, player_status as status,
            gps_total_distance as total_distance,
            case when gps_velocity_band_4_total_distance is null and gps_velocity_band_5_total_distance is null then null
                 else coalesce(gps_velocity_band_4_total_distance, 0) + coalesce(gps_velocity_band_5_total_distance, 0)
@@ -372,19 +381,28 @@ def main():
             st.stop()
 
         today = today_uk()
-        weeks = available_weeks(sessions, today)
-        if not weeks:
-            st.warning("No in-season sessions found in the GPS data yet.")
+        if sessions.empty:
+            st.warning("No sessions found in the GPS data yet.")
             st.stop()
-        newest = latest_week(sessions, today)
 
         if st.button("Refresh data now", key="refresh"):
             load_sessions.clear()
             st.rerun()
-        c1, c2, c3 = st.columns([2, 2, 3])
+        c1, c2, c3 = st.columns([3, 2, 3])
         with c1:
-            labels = {f"Week {w}" + (" (latest)" if w == newest else ""): w for w in weeks}
-            week = labels[st.selectbox("Week", list(labels), key="week")]
+            # The cut-off is the most recent MD-1: everything up to and including it counts as done.
+            cut_days = md_minus_one_dates(sessions, today)
+            if cut_days:
+                labels = {f"{d:%a %d/%m/%Y} (MD-1), week {week_of(sessions, d)}": d for d in cut_days}
+                cutoff = labels[st.selectbox("Counted up to and including", list(labels), key="cutoff")]
+            else:
+                st.warning("No MD-1 day found in the GPS data, so choose the last day to count instead.")
+                fallback = latest_session_day(sessions, today) or today
+                cutoff = st.date_input("Last day to count", value=fallback, max_value=today, key="cutoff_date")
+        week = week_of(sessions, cutoff)
+        if week is None:
+            st.warning(f"There are no sessions on {cutoff:%d/%m/%Y}, so there's nothing to work from.")
+            st.stop()
         with c2:
             fit_only = st.checkbox("Fit players only", value=True, key="fit",
                                    help="Leaves out sessions where the player was recorded as injured, modified or "
@@ -392,7 +410,7 @@ def main():
         with c3:
             mode = st.radio("Numbers to put in the CSV", [MODE_STILL, MODE_AVERAGE], key="mode")
 
-        summary = week_summary(sessions, week, today, fit_only=fit_only)
+        summary = week_summary(sessions, week, cutoff, fit_only=fit_only)
         table = build_table(roster, summary, mode)
 
         # ------------------------------------------------------------ the CSV
@@ -400,15 +418,17 @@ def main():
         filled = int(((table["csv_total_distance"].notna()) | (table["csv_high_speed"].notna())).sum())
         st.download_button("Download CSV for Catapult", data=csv_bytes, file_name=f"athlete_thresholds_week_{week}.csv",
                            mime="text/csv", type="primary", key="download")
-        st.caption(f"Week {week}. {filled} of {len(table)} athletes have a number in the file; the rest are blank, "
-                   f"as in your Catapult file (goalkeepers, players already at their average, or no data).")
+        st.caption(f"Week {week}, counted up to and including {cutoff:%A %d/%m/%Y}; match day and anything after it are not "
+                   f"counted. {filled} of {len(table)} athletes have a number in the file; the rest are blank, as in your "
+                   f"Catapult file (goalkeepers, players already at their average, or no data)."
+                   + (" This week is pre-season, so there is no earlier in-season week to average." if week <= 0 else ""))
 
         # ------------------------------------------------------------ the numbers behind it
         def whole(series):
             return [None if pd.isna(v) else int(round(v)) for v in series]
         shown = pd.DataFrame({
             "Athlete": table["athlete_name"], "Position": table["position"],
-            "Sessions this week": table["sessions"], "Earlier weeks used": table["weeks_used"],
+            "Sessions counted": table["sessions"], "Earlier weeks used": table["weeks_used"],
             "Distance: average week": whole(table["avg_td"]), "Distance: so far": whole(table["so_far_td"]),
             "Distance: still to do": whole(table["remaining_td"]),
             "HSR: average week": whole(table["avg_hsr"]), "HSR: so far": whole(table["so_far_hsr"]),
@@ -416,19 +436,20 @@ def main():
             "Note": table["note"],
         })
         st.dataframe(shown, width="stretch", hide_index=True, height=min(900, 38 * (len(shown) + 1) + 3))
-        st.caption("Average week = the average of the player's own weekly totals over earlier weeks (full weeks only, "
-                   "Fit players only, SESSION rows, week 19 test data left out). High speed running = velocity band 4 + 5 "
+        st.caption("So far = what the player had done by the cut-off day. Average week = the average of the player's "
+                   "own weekly totals over earlier weeks (full weeks only, Fit players only, SESSION rows, week 19 test "
+                   "data left out). Still to do = average week minus so far. High speed running = velocity band 4 + 5 "
                    "distance. Metres, per player.")
 
         # ------------------------------------------------------------ so nothing is silently missing
         unmatched = [n for n, note in zip(table["athlete_name"], table["note"]) if note.startswith("No Fit session")]
         if unmatched:
-            st.caption("No data this week for: " + "; ".join(unmatched) + ". If someone should have data, their name may "
-                       "be spelled differently in the GPS data than in your Catapult file.")
+            st.caption("No sessions up to the cut-off for: " + "; ".join(unmatched) + ". If someone should have data, their "
+                       "name may be spelled differently in the GPS data than in your Catapult file.")
         in_file = {person_key(n) for n in table["athlete_name"]}
         extra = sorted({str(p) for k, p in zip(summary.index, summary["player"]) if k not in in_file}, key=str.casefold)
         if extra:
-            st.caption("In this week's GPS data but not in your athlete file (so not in the CSV): " + ", ".join(extra))
+            st.caption("In the GPS data up to the cut-off but not in your athlete file (so not in the CSV): " + ", ".join(extra))
 
         with st.expander("Preview of the CSV exactly as it will be downloaded"):
             st.code(csv_bytes.decode("utf-8"), language=None)
