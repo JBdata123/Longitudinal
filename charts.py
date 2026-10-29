@@ -740,3 +740,5 @@ LEGEND_WEEKLY_MAX_VEL = [(GREY, "Average"), (GOLD, "Weekly Max Velocity")]
 
 LEGEND_DIVES = [(GOLD, "Dives (Left + Centre + Right)")]
 LEGEND_JUMPS = [(GREEN, "Total Jumps")]
+LEGEND_WEEKLY_JUMPS = [(GREY, "Average"), (GREEN, "Weekly Jumps")]
+LEGEND_WEEKLY_DIVES = [(GREY, "Average"), (GOLD, "Weekly Dives")]
