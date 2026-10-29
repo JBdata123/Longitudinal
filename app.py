@@ -306,6 +306,45 @@ with wk6:
         legend_items=charts.LEGEND_WEEKLY_MAX_VEL,
     )
 
+# ---------------------------------------------------------------- third weekly row (jumps / dives)
+# Dives = left + centre + right dive counts added together.
+gps_player_full = gps_player_full.copy()
+_dive_cols = ["Dive Left Count", "Dive Centre Count", "Dive Right Count"]
+if all(c in gps_player_full.columns for c in _dive_cols):
+    gps_player_full["Dives (L+C+R)"] = (
+        gps_player_full[_dive_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    )
+
+
+def weekly_count_panel(col, title, bar_color, legend, key, avg_value=None, max_value=None):
+    """Weekly total of a count metric, with average bar + max line. Skipped
+    with a note if the column is missing or the player has none recorded."""
+    if col not in gps_player_full.columns:
+        st.info(f"No data for {title.lower()} in the GPS sheet.")
+        return
+    if not (pd.to_numeric(gps_player_full[col], errors="coerce").fillna(0) > 0).any():
+        st.info(f"No {title.lower()} recorded for this player.")
+        return
+    render_panel(
+        title,
+        charts.chart_weekly_single(gps_player_full, col, avg_value, bar_color, bullet_marker=max_value),
+        key=key,
+        legend_items=legend,
+    )
+
+
+wk7, wk8 = st.columns(2)
+with wk7:
+    weekly_count_panel(
+        "Total Jumps", "Weekly Jumps", charts.GREEN, charts.LEGEND_WEEKLY_JUMPS, "chart_weekly_jumps",
+        avg_value=player_data["avg"].get("jumps"), max_value=player_data["max"].get("jumps"),
+    )
+with wk8:
+    weekly_count_panel(
+        "Dives (L+C+R)", "Weekly Dives", charts.GOLD, charts.LEGEND_WEEKLY_DIVES, "chart_weekly_dives",
+        avg_value=player_data["avg"].get("dives"), max_value=player_data["max"].get("dives"),
+    )
+
 # ---------------------------------------------------------------- match-minute reference lines
 mm_col, _spacer = st.columns([2, 5])
 with mm_col:
