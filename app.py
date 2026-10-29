@@ -415,4 +415,10 @@ def gk_panel(title, col, key, color, legend):
 
 
 gk_panel("Jumps", "Total Jumps", "chart_jumps", charts.GREEN, charts.LEGEND_JUMPS)
-gk_panel("Dives", "Total Dives", "chart_dives", charts.GOLD, charts.LEGEND_DIVES)
+# Dives = left + centre + right dive counts added together
+dive_cols = ["Dive Left Count", "Dive Centre Count", "Dive Right Count"]
+if all(c in gps_player_display.columns for c in dive_cols):
+    gps_player_display["Dives (L+C+R)"] = (
+        gps_player_display[dive_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    )
+gk_panel("Dives", "Dives (L+C+R)", "chart_dives", charts.GOLD, charts.LEGEND_DIVES)
