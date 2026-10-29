@@ -396,3 +396,23 @@ else:
         legend_items=charts.LEGEND_HR_ZONES,
         box_note="Training Effect",
     )
+
+# ---------------------------------------------------------------- jumps / dives
+def gk_panel(title, col, key, color, legend):
+    if col not in gps_player_display.columns:
+        st.info(f"No '{col}' column found in the GPS data, so {title} can't be shown.")
+        return
+    vals = pd.to_numeric(gps_player_display[col], errors="coerce")
+    if not (vals.fillna(0) > 0).any():
+        st.info(f"No {title.lower()} recorded for this player in the selected date range.")
+        return
+    render_panel(
+        title,
+        charts.chart_daily_count(gps_player_display, col, color, title),
+        key=key,
+        legend_items=legend,
+    )
+
+
+gk_panel("Jumps", "Total Jumps", "chart_jumps", charts.GREEN, charts.LEGEND_JUMPS)
+gk_panel("Dives", "Total Dives", "chart_dives", charts.GOLD, charts.LEGEND_DIVES)
