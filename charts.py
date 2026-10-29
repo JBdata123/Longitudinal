@@ -738,5 +738,5 @@ LEGEND_WEEKLY_ACCEL_DECEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations"),
 LEGEND_WEEKLY_HR_HI = [(GREY, "Average"), (RED, "Weekly High Intensity HR (>90%)")]
 LEGEND_WEEKLY_MAX_VEL = [(GREY, "Average"), (GOLD, "Weekly Max Velocity")]
 
-LEGEND_DIVES = [(GOLD, "Total Dives")]
+LEGEND_DIVES = [(GOLD, "Dives (Left + Centre + Right)")]
 LEGEND_JUMPS = [(GREEN, "Total Jumps")]
