@@ -697,6 +697,29 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
     return fig
 
 
+# ---------------------------------------------------------------- Simple daily count chart (dives / saves)
+def chart_daily_count(gps_player: pd.DataFrame, col: str, color: str, name: str) -> go.Figure:
+    """One bar per calendar date for a simple count metric, value printed on
+    top, blank on days with no data (same look as the other daily charts)."""
+    x = _x_labels(gps_player)
+    raw = pd.to_numeric(gps_player[col], errors="coerce")
+    has = raw.notna()
+    vals = raw.fillna(0).round(0)
+    fig = go.Figure()
+    fig.add_bar(
+        x=x, y=vals, marker_color=color,
+        text=_bold_labels_masked(vals, has, "{:.0f}"),
+        textposition="outside", cliponaxis=False,
+        textfont=dict(size=VALUE_FONT_SIZE, color=WHITE, family=FONT),
+        constraintext="none", textangle=0, hoverinfo="skip", name=name,
+    )
+    fig.update_layout(bargap=_bargap_for(len(x)))
+    fig = base_layout(fig, n_dates=len(x))
+    top = vals.max() if len(vals) else 0
+    fig.update_layout(yaxis=dict(visible=False, range=[0, (top if top > 0 else 1) / 0.8]))
+    return fig
+
+
 # ---------------------------------------------------------------- Legend (colour key) definitions
 LEGEND_TOTAL_DISTANCE = [(GREY, "Total Distance"), (GOLD, "Metres per Minute")]
 LEGEND_MAX_SPEED = [(GREY, "Max Speed"), (GOLD, "Max Speed %")]
@@ -714,3 +737,6 @@ LEGEND_WEEKLY_HSR_SD = [(GREY, "Average"), (GOLD, "HSR"), (RED, "Sprint Distance
 LEGEND_WEEKLY_ACCEL_DECEL = [(GREY, "Average"), (GREEN, "Weekly Accelerations"), (RED, "Weekly Decelerations")]
 LEGEND_WEEKLY_HR_HI = [(GREY, "Average"), (RED, "Weekly High Intensity HR (>90%)")]
 LEGEND_WEEKLY_MAX_VEL = [(GREY, "Average"), (GOLD, "Weekly Max Velocity")]
+
+LEGEND_DIVES = [(GOLD, "Total Dives")]
+LEGEND_JUMPS = [(GREEN, "Total Jumps")]
