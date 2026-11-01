@@ -238,13 +238,33 @@ max_hr_hi = player_data["max"].get("hr_hi")
 max_accel_hi = player_data["max"].get("accel_hi")
 max_decel_hi = player_data["max"].get("decel_hi")
 
+# ---------------------------------------------------------------- week range filter (weekly charts)
+# Only filters which weekly bars are drawn - the Average bar and max lines
+# still use every week.
+all_weeks = sorted(
+    {int(w) for w in pd.to_numeric(gps_day["Week Number"], errors="coerce").dropna().unique()},
+    key=charts._week_sort_key,
+)
+selected_weeks = None
+if all_weeks:
+    wk_slider_col, _wk_spacer = st.columns([3, 4])
+    with wk_slider_col:
+        wk_lo, wk_hi = st.select_slider(
+            "Weekly charts: week range",
+            options=all_weeks,
+            value=(all_weeks[0], all_weeks[-1]),
+            format_func=lambda w: f"Week {w}",
+            key="week_range_slider",
+        )
+    selected_weeks = all_weeks[all_weeks.index(wk_lo): all_weeks.index(wk_hi) + 1]
+
 wk1, wk2, wk3, wk4 = st.columns(4)
 with wk1:
     render_panel(
         "Weekly Total Distance",
         charts.chart_weekly_single(
             gps_player_full, "Total Distance", avg_total_distance, charts.GOLD,
-            bullet_marker=max_total_distance,
+            bullet_marker=max_total_distance, weeks=selected_weeks,
         ),
         key="chart_weekly_total_distance",
         legend_items=charts.LEGEND_WEEKLY_TOTAL_DISTANCE,
@@ -254,7 +274,7 @@ with wk2:
         "Weekly HSR + SD",
         charts.chart_weekly_hsr_sd(
             gps_player_full, avg_hsr_sd,
-            bullet_marker=max_hsr_sd,
+            bullet_marker=max_hsr_sd, weeks=selected_weeks,
         ),
         key="chart_weekly_hsr_sd",
         legend_items=charts.LEGEND_WEEKLY_HSR_SD,
@@ -267,6 +287,7 @@ with wk3:
             "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
             avg_accel=avg_accel, avg_decel=avg_decel,
             bullet_marker_accel=max_accel, bullet_marker_decel=max_decel,
+            weeks=selected_weeks,
         ),
         key="chart_weekly_accel_decel",
         legend_items=charts.LEGEND_WEEKLY_ACCEL_DECEL,
@@ -276,7 +297,7 @@ with wk4:
         "Weekly HR Minutes >90% Max",
         charts.chart_weekly_hr_hi(
             fb_daily_full, avg_hr_hi,
-            bullet_marker=max_hr_hi,
+            bullet_marker=max_hr_hi, weeks=selected_weeks,
         ),
         key="chart_weekly_hr_hi",
         legend_items=charts.LEGEND_WEEKLY_HR_HI,
@@ -294,6 +315,7 @@ with wk5:
             "Acceleration B2-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
             avg_accel=avg_accel_hi, avg_decel=avg_decel_hi,
             bullet_marker_accel=max_accel_hi, bullet_marker_decel=max_decel_hi,
+            weeks=selected_weeks,
         ),
         key="chart_weekly_accel_decel_23",
         legend_items=charts.LEGEND_WEEKLY_ACCEL_DECEL,
@@ -301,7 +323,7 @@ with wk5:
 with wk6:
     render_panel(
         "Weekly Max Velocity",
-        charts.chart_weekly_max_velocity(gps_player_full, bullet_marker=player_max_vel),
+        charts.chart_weekly_max_velocity(gps_player_full, bullet_marker=player_max_vel, weeks=selected_weeks),
         key="chart_weekly_max_velocity",
         legend_items=charts.LEGEND_WEEKLY_MAX_VEL,
     )
@@ -327,7 +349,7 @@ def weekly_count_panel(col, title, bar_color, legend, key, avg_value=None, max_v
         return
     render_panel(
         title,
-        charts.chart_weekly_single(gps_player_full, col, avg_value, bar_color, bullet_marker=max_value),
+        charts.chart_weekly_single(gps_player_full, col, avg_value, bar_color, bullet_marker=max_value, weeks=selected_weeks),
         key=key,
         legend_items=legend,
     )
@@ -346,40 +368,59 @@ with wk8:
     )
 
 # ---------------------------------------------------------------- match-minute reference lines
-mm_col, _spacer = st.columns([2, 5])
+mm_col, wu_col, _spacer = st.columns([2, 2, 3])
 with mm_col:
     minutes_text = st.text_input(
         "Match-minute reference lines (comma separated, e.g. 30, 45, 90)",
         value="45, 90", key="match_minutes_input",
     )
+with wu_col:
+    st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+    include_wu = st.checkbox(
+        "Add average warm-up on top of the lines (+ WU)", value=True, key="include_wu",
+    )
 match_minutes = charts.parse_match_minutes(minutes_text)
 
-# Matchday = Day label containing "GAME" or "MD" (not MD-1 / MD+1). Rates use
-# only that player's matchday 1st-half / 2nd-half rows (warm-up is excluded in
-# data_loader), pooled: total of the metric / total of Total Duration.
+# Matchday = Day label containing "GAME" or "MD" (not MD-1 / MD+1). Per-minute
+# rates use only that player's matchday 1st/2nd-half rows, pooled: total of the
+# metric / total of Total Duration. The warm-up average is the player's
+# matchday warm-up load averaged across their matchdays.
 md_dates = set(gps_player_full.loc[charts.is_match_day(gps_player_full["Day"]), "Date"])
 player_periods = gps_periods[gps_periods["Player Name"] == player]
 periods_md = player_periods[
     charts.is_match_day(player_periods["Day"]) | player_periods["Date"].isin(md_dates)
 ]
+_is_warm = periods_md["Period Name"].astype(str).str.lower().str.contains("warm", regex=False)
+halves_md = periods_md[~_is_warm]
+warm_md = periods_md[_is_warm]
 
-rate_td = charts.match_rate_per_min(periods_md, ["Total Distance"])
-rate_hsr_sd = charts.match_rate_per_min(
-    periods_md, ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"])
-rate_acc_13 = charts.match_rate_per_min(periods_md, ["Acceleration B1-3 Total Efforts (Gen 2)"])
-rate_dec_13 = charts.match_rate_per_min(periods_md, ["Deceleration B1-3 Total Efforts (Gen 2)"])
-rate_acc_23 = charts.match_rate_per_min(periods_md, ["Acceleration B2-3 Total Efforts (Gen 2)"])
-rate_dec_23 = charts.match_rate_per_min(periods_md, ["Deceleration B2-3 Total Efforts (Gen 2)"])
+_HSR_SD_COLS = ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"]
+_ACC13, _DEC13 = ["Acceleration B1-3 Total Efforts (Gen 2)"], ["Deceleration B1-3 Total Efforts (Gen 2)"]
+_ACC23, _DEC23 = ["Acceleration B2-3 Total Efforts (Gen 2)"], ["Deceleration B2-3 Total Efforts (Gen 2)"]
 
-lines_td = charts.match_lines(rate_td, match_minutes)
-lines_hsr_sd = charts.match_lines(rate_hsr_sd, match_minutes)
-lines_acc_13 = charts.match_lines(rate_acc_13, match_minutes)
-lines_dec_13 = charts.match_lines(rate_dec_13, match_minutes)
-lines_acc_23 = charts.match_lines(rate_acc_23, match_minutes)
-lines_dec_23 = charts.match_lines(rate_dec_23, match_minutes)
+rate_td = charts.match_rate_per_min(halves_md, ["Total Distance"])
+rate_hsr_sd = charts.match_rate_per_min(halves_md, _HSR_SD_COLS)
+rate_acc_13 = charts.match_rate_per_min(halves_md, _ACC13)
+rate_dec_13 = charts.match_rate_per_min(halves_md, _DEC13)
+rate_acc_23 = charts.match_rate_per_min(halves_md, _ACC23)
+rate_dec_23 = charts.match_rate_per_min(halves_md, _DEC23)
+
+
+def _wu(cols):
+    return charts.warmup_avg(warm_md, cols) if include_wu else None
+
+
+lines_td = charts.match_lines(rate_td, match_minutes, warmup=_wu(["Total Distance"]))
+lines_hsr_sd = charts.match_lines(rate_hsr_sd, match_minutes, warmup=_wu(_HSR_SD_COLS))
+lines_acc_13 = charts.match_lines(rate_acc_13, match_minutes, warmup=_wu(_ACC13))
+lines_dec_13 = charts.match_lines(rate_dec_13, match_minutes, warmup=_wu(_DEC13))
+lines_acc_23 = charts.match_lines(rate_acc_23, match_minutes, warmup=_wu(_ACC23))
+lines_dec_23 = charts.match_lines(rate_dec_23, match_minutes, warmup=_wu(_DEC23))
 
 if match_minutes and rate_td is None:
     st.caption("No matchday (MD) 1st/2nd-half data found for this player, so no match-minute lines are shown.")
+elif match_minutes and include_wu and charts.warmup_avg(warm_md, ["Total Distance"]) is None:
+    st.caption("No matchday warm-up rows found for this player, so the lines show the match-minute value without warm-up.")
 
 # ---------------------------------------------------------------- daily charts
 render_panel(
