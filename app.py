@@ -367,6 +367,35 @@ with wk8:
         avg_value=player_data["avg"].get("dives"), max_value=player_data["max"].get("dives"),
     )
 
+# ---------------------------------------------------------------- last-season game data (fallback)
+# Players with NO matchday data this season (so the match-minute lines would
+# otherwise be blank) use a game from last season instead. Once a player has
+# real matchday data in the sheet, the sheet data is used and this is ignored.
+_FALLBACK_COLS = [
+    "Player Name", "Period Name", "Date", "Total Duration", "Total Distance",
+    "Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD",
+    "Acceleration B1-3 Total Efforts (Gen 2)", "Acceleration B2-3 Total Efforts (Gen 2)",
+    "Deceleration B1-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
+]
+_FALLBACK_ROWS = {
+    "celeste boureille": [
+        ("Celeste Boureille", "WUP",      "2025-12-07", "00:32:43", 2413.01001, 19.25, 0,     0,     27, 4,  16, 1),
+        ("Celeste Boureille", "1st Half", "2025-12-07", "00:54:19", 4618.62744, 74.91, 0,     0,     32, 2,  38, 7),
+        ("Celeste Boureille", "2nd Half", "2025-12-07", "00:51:57", 4498.51221, 89.19, 23.88, 16.67, 30, 3,  34, 10),
+    ],
+    "emma jansson": [
+        ("Emma Jansson", "WUP",      "2026-05-03", "00:34:50", 2571.42554, 11.76,  0,     0,    34, 7,  31, 6),
+        ("Emma Jansson", "1st Half", "2026-05-03", "00:49:04", 5385.03027, 224.89, 59.48, 8.78, 49, 4,  56, 14),
+        ("Emma Jansson", "2nd Half", "2026-05-03", "00:52:02", 5375.85986, 215.47, 39.17, 0,    51, 12, 43, 10),
+    ],
+}
+LAST_SEASON_MATCHES = {}
+for _k, _rows in _FALLBACK_ROWS.items():
+    _df = pd.DataFrame(_rows, columns=_FALLBACK_COLS)
+    _df["Date"] = pd.to_datetime(_df["Date"])
+    LAST_SEASON_MATCHES[_k] = _df
+
+
 # ---------------------------------------------------------------- match-minute reference lines
 mm_col, wu_col, _spacer = st.columns([2, 2, 3])
 with mm_col:
@@ -390,9 +419,17 @@ player_periods = gps_periods[gps_periods["Player Name"] == player]
 periods_md = player_periods[
     charts.is_match_day(player_periods["Day"]) | player_periods["Date"].isin(md_dates)
 ]
-_is_warm = periods_md["Period Name"].astype(str).str.lower().str.contains("warm", regex=False)
+_is_warm = charts.is_warmup_period(periods_md["Period Name"])
 halves_md = periods_md[~_is_warm]
 warm_md = periods_md[_is_warm]
+
+# No matchday data this season -> fall back to last season's game (if we have one).
+using_last_season = False
+if halves_md.empty and player_key in LAST_SEASON_MATCHES:
+    _fb = LAST_SEASON_MATCHES[player_key]
+    _fb_warm = charts.is_warmup_period(_fb["Period Name"])
+    halves_md, warm_md = _fb[~_fb_warm], _fb[_fb_warm]
+    using_last_season = True
 
 _HSR_SD_COLS = ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"]
 _ACC13, _DEC13 = ["Acceleration B1-3 Total Efforts (Gen 2)"], ["Deceleration B1-3 Total Efforts (Gen 2)"]
@@ -417,7 +454,10 @@ lines_dec_13 = charts.match_lines(rate_dec_13, match_minutes, warmup=_wu(_DEC13)
 lines_acc_23 = charts.match_lines(rate_acc_23, match_minutes, warmup=_wu(_ACC23))
 lines_dec_23 = charts.match_lines(rate_dec_23, match_minutes, warmup=_wu(_DEC23))
 
-if match_minutes and rate_td is None:
+if match_minutes and using_last_season:
+    _gd = halves_md["Date"].min().strftime("%d/%m/%Y")
+    st.caption(f"No games played this season yet, so the match-minute lines use {player}'s game on {_gd} (last season).")
+elif match_minutes and rate_td is None:
     st.caption("No matchday (MD) 1st/2nd-half data found for this player, so no match-minute lines are shown.")
 elif match_minutes and include_wu and charts.warmup_avg(warm_md, ["Total Distance"]) is None:
     st.caption("No matchday warm-up rows found for this player, so the lines show the match-minute value without warm-up.")
