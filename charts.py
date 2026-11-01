@@ -151,17 +151,30 @@ def _add_divider(fig):
     )
 
 
+def _filter_weeks(grouped, weeks, week_col="Week Number"):
+    """Keeps only the chosen week numbers (None = keep all). Averages and max
+    lines are always worked out BEFORE this, from every week."""
+    if weeks is None:
+        return grouped
+    return grouped[grouped[week_col].isin(list(weeks))]
+
+
 def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_value, bar_color: str,
-                         week_col="Week Number", fmt="{:.0f}", bullet_marker=None) -> go.Figure:
+                         week_col="Week Number", fmt="{:.0f}", bullet_marker=None, weeks=None) -> go.Figure:
     """Weekly summary bar: [Average (grey)] | divider | [Week -1] [Week -2] ...
-    If avg_value is None, the average is the mean of the player's weekly totals."""
-    grouped = _weekly_grouped(gps_full_history, week_col, total=value_col)
+    Average / max line use ALL weeks (unless given manually); `weeks` only
+    filters which weekly bars are shown."""
+    grouped_all = _weekly_grouped(gps_full_history, week_col, total=value_col)
+    all_values = grouped_all["total"].round(0)
+    if avg_value is None:
+        avg_value = all_values.mean() if len(all_values) else 0
+    if bullet_marker is None and len(all_values):
+        bullet_marker = all_values.max()  # no manual max -> best week so far
+
+    grouped = _filter_weeks(grouped_all, weeks, week_col)
     week_labels = _weekly_labels(grouped, week_col)
     week_values = grouped["total"].round(0)
-    if avg_value is None:
-        avg_value = week_values.mean() if len(week_values) else 0
-    if bullet_marker is None and len(week_values):
-        bullet_marker = week_values.max()  # no manual max -> best week so far
+
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
     colors = [GREY] + [bar_color] * len(week_labels)
@@ -192,21 +205,25 @@ def chart_weekly_single(gps_full_history: pd.DataFrame, value_col: str, avg_valu
     return fig
 
 
-def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number", bullet_marker=None) -> go.Figure:
+def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Week Number",
+                        bullet_marker=None, weeks=None) -> go.Figure:
     """Weekly HSR+SD stacked summary: [Average (grey)] | divider |
     [Week -1 (gold HSR + red SD stacked)] ..."""
     hist = gps_full_history.dropna(subset=[week_col]).copy()
     hist["_hsr"] = hist["Velocity Band 4 Total Distance"].fillna(0) + hist["Velocity Band 5 Total Distance"].fillna(0)
     hist["_sd"] = hist["SD"].fillna(0)
-    grouped = _weekly_grouped(hist, week_col, hsr="_hsr", sd="_sd")
+    grouped_all = _weekly_grouped(hist, week_col, hsr="_hsr", sd="_sd")
+    combo_all = grouped_all["hsr"].round(0) + grouped_all["sd"].round(0)
+    if avg_value is None:
+        avg_value = combo_all.mean() if len(combo_all) else 0
+    if bullet_marker is None and len(combo_all):
+        bullet_marker = combo_all.max()  # no manual max -> best week so far
+
+    grouped = _filter_weeks(grouped_all, weeks, week_col)
     week_labels = _weekly_labels(grouped, week_col)
     hsr_week = grouped["hsr"].round(0)
     sd_week = grouped["sd"].round(0)
-    combo_week = hsr_week + sd_week
-    if avg_value is None:
-        avg_value = combo_week.mean() if len(combo_week) else 0
-    if bullet_marker is None and len(combo_week):
-        bullet_marker = combo_week.max()  # no manual max -> best week so far
+
     x = ["Average"] + week_labels
     hsr_y = [avg_value] + list(hsr_week)
     sd_y = [0] + list(sd_week)
@@ -250,26 +267,29 @@ def chart_weekly_hsr_sd(gps_full_history: pd.DataFrame, avg_value, week_col="Wee
 def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, decel_col: str,
                               avg_accel=None, avg_decel=None, week_col="Week Number",
                               bullet_marker_accel=None, bullet_marker_decel=None,
-                              auto_max=True) -> go.Figure:
+                              auto_max=True, weeks=None) -> go.Figure:
     """Weekly Accelerations + Decelerations clustered per week (green/red), with
-    a grey Average pair left of the divider. If avg_* is None the average is the
-    mean of the player's weekly totals. If auto_max is True and no max is given,
-    the max line is the player's highest recorded week."""
-    grouped = _weekly_grouped(gps_full_history, week_col, accel=accel_col, decel=decel_col)
+    a grey Average pair left of the divider. Averages / max lines use ALL weeks
+    (unless given manually); `weeks` only filters which weekly bars are shown."""
+    grouped_all = _weekly_grouped(gps_full_history, week_col, accel=accel_col, decel=decel_col)
+    accel_all = grouped_all["accel"].round(0)
+    decel_all = grouped_all["decel"].round(0)
+
+    if avg_accel is None:
+        avg_accel = accel_all.mean() if len(accel_all) else 0
+    if avg_decel is None:
+        avg_decel = decel_all.mean() if len(decel_all) else 0
+
+    if auto_max:
+        if bullet_marker_accel is None and len(accel_all):
+            bullet_marker_accel = accel_all.max()
+        if bullet_marker_decel is None and len(decel_all):
+            bullet_marker_decel = decel_all.max()
+
+    grouped = _filter_weeks(grouped_all, weeks, week_col)
     week_labels = _weekly_labels(grouped, week_col)
     accel_week = grouped["accel"].round(0)
     decel_week = grouped["decel"].round(0)
-
-    if avg_accel is None:
-        avg_accel = accel_week.mean() if len(accel_week) else 0
-    if avg_decel is None:
-        avg_decel = decel_week.mean() if len(decel_week) else 0
-
-    if auto_max:
-        if bullet_marker_accel is None and len(accel_week):
-            bullet_marker_accel = accel_week.max()
-        if bullet_marker_decel is None and len(decel_week):
-            bullet_marker_decel = decel_week.max()
 
     x = ["Average"] + week_labels
     accel_y = [avg_accel] + list(accel_week)
@@ -321,19 +341,22 @@ def chart_weekly_accel_decel(gps_full_history: pd.DataFrame, accel_col: str, dec
     return fig
 
 
-def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="Week Number", bullet_marker=None) -> go.Figure:
+def chart_weekly_hr_hi(fb_daily_full: pd.DataFrame, avg_value=None, week_col="Week Number",
+                       bullet_marker=None, weeks=None) -> go.Figure:
     """Weekly minutes above 90% HR Max. Expects one row per date (from
-    aggregate_fb_daily) with a Week Number column merged in. Multi-session days
-    are summed per day, then all days summed per week."""
+    aggregate_fb_daily) with a Week Number column merged in. Average / max use
+    ALL weeks; `weeks` only filters which weekly bars are shown."""
     hist = fb_daily_full.dropna(subset=[week_col]).copy()
-    grouped = _weekly_grouped(hist, week_col, total="_hi_mins")
+    grouped_all = _weekly_grouped(hist, week_col, total="_hi_mins")
+    all_values = grouped_all["total"].round(0)
+    if avg_value is None:
+        avg_value = all_values.mean() if len(all_values) else 0
+    if bullet_marker is None and len(all_values):
+        bullet_marker = all_values.max()  # no manual max -> best week so far
+
+    grouped = _filter_weeks(grouped_all, weeks, week_col)
     week_labels = _weekly_labels(grouped, week_col)
     week_values = grouped["total"].round(0)
-
-    if avg_value is None:
-        avg_value = week_values.mean() if len(week_values) else 0
-    if bullet_marker is None and len(week_values):
-        bullet_marker = week_values.max()  # no manual max -> best week so far
 
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
@@ -381,15 +404,18 @@ def player_max_velocity(gps_full_history: pd.DataFrame):
 
 
 def chart_weekly_max_velocity(gps_full_history: pd.DataFrame, avg_value=None,
-                               week_col="Week Number", bullet_marker=None) -> go.Figure:
+                               week_col="Week Number", bullet_marker=None, weeks=None) -> go.Figure:
     """Highest max velocity reached in each week, with a grey Average bar
-    (mean of the weekly highs) and a dashed line at the player's true max."""
-    grouped = _weekly_grouped(gps_full_history, week_col, how="max", top="Maximum Velocity")
+    (mean of ALL weekly highs) and a dashed line at the player's true max.
+    `weeks` only filters which weekly bars are shown."""
+    grouped_all = _weekly_grouped(gps_full_history, week_col, how="max", top="Maximum Velocity")
+    all_values = grouped_all["top"].round(1)
+    if avg_value is None:
+        avg_value = round(all_values.mean(), 1) if len(all_values) else 0
+
+    grouped = _filter_weeks(grouped_all, weeks, week_col)
     week_labels = _weekly_labels(grouped, week_col)
     week_values = grouped["top"].round(1)
-
-    if avg_value is None:
-        avg_value = round(week_values.mean(), 1) if len(week_values) else 0
 
     x = ["Average"] + week_labels
     y = [avg_value] + list(week_values)
@@ -483,20 +509,46 @@ def match_rate_per_min(periods_df, cols):
     return float(total / minutes)
 
 
-def match_lines(rate, minutes):
-    """[(minutes, predicted value)] for each requested match length."""
+def warmup_avg(warm_df, cols):
+    """Average matchday warm-up load: the summed `cols` over each matchday's
+    warm-up row(s), averaged across that player's matchdays. None if there is
+    no warm-up data."""
+    if warm_df is None or warm_df.empty or "Date" not in warm_df.columns:
+        return None
+    if any(c not in warm_df.columns for c in cols):
+        return None
+    row_total = sum(pd.to_numeric(warm_df[c], errors="coerce").fillna(0) for c in cols)
+    per_day = row_total.groupby(warm_df["Date"]).sum()
+    return float(per_day.mean()) if len(per_day) else None
+
+
+def match_lines(rate, minutes, warmup=None):
+    """One reference point per requested match length.
+    With a warm-up average: (minutes, rate * minutes + warmup, True) - i.e. the
+    match-minute value with the average warm-up load added on top.
+    Without one: (minutes, rate * minutes) - the plain match-minute value."""
+    out = []
     if rate is None or not minutes:
-        return []
-    return [(m, rate * m) for m in minutes]
+        return out
+    for m in minutes:
+        base = rate * m
+        if warmup is not None:
+            out.append((m, base + warmup, True))
+        else:
+            out.append((m, base))
+    return out
 
 
 def add_match_lines(fig, lines, color, prefix="", position="top left"):
-    """Dotted horizontal reference line per requested match length."""
-    for mins, val in (lines or []):
+    """One dotted line per match length, labelled '+ WU' where the average
+    warm-up load has been added on top."""
+    for ln in (lines or []):
+        mins, val = ln[0], ln[1]
+        with_wu = len(ln) > 2 and ln[2]
+        label = f"{prefix}{mins:g} min + WU: {val:.0f}" if with_wu else f"{prefix}{mins:g} min: {val:.0f}"
         fig.add_hline(
             y=val, line_dash="dot", line_color=color, line_width=1.5,
-            annotation_text=f"{prefix}{mins:g} min: {val:.0f}",
-            annotation_position=position,
+            annotation_text=label, annotation_position=position,
             annotation_font=dict(family=FONT, size=10, color=WHITE),
         )
     return fig
@@ -527,7 +579,7 @@ def chart_total_distance(gps_player: pd.DataFrame, gps_full_history: pd.DataFram
     fig = base_layout(fig, n_dates=len(x))
     max_dist = dist.max() if len(dist) else 0
     if match_lines:
-        max_dist = max(max_dist, max(v for _, v in match_lines))
+        max_dist = max(max_dist, max(l[1] for l in match_lines))
     max_mpm = mpm.max() if len(mpm) else 0
     if pd.isna(max_mpm):
         max_mpm = 0
@@ -626,7 +678,7 @@ def chart_hsr_sd(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
     top = (hsr + sd)
     top_max = top.max() if len(top) else 0
     if match_lines:
-        top_max = max(top_max, max(v for _, v in match_lines))
+        top_max = max(top_max, max(l[1] for l in match_lines))
     fig = _apply_value_row(fig, x, acwr_vals, top_max, color_fn=acwr_box_color)
     add_match_lines(fig, match_lines, GOLD)
     return fig
@@ -660,7 +712,7 @@ def chart_accel_decel(gps_player: pd.DataFrame, gps_full_history: pd.DataFrame,
     top_max = top.max() if len(top) else 0
     for ln in (accel_lines, decel_lines):
         if ln:
-            top_max = max(top_max, max(v for _, v in ln))
+            top_max = max(top_max, max(l[1] for l in ln))
     fig = _apply_value_row(fig, x, acwr_vals, top_max, color_fn=acwr_box_color)
     add_match_lines(fig, accel_lines, GREEN, prefix="Acc ", position="top left")
     add_match_lines(fig, decel_lines, RED, prefix="Dec ", position="bottom left")
