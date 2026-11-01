@@ -69,7 +69,7 @@ def load_data(_cache_buster: int = 0):
     # them apart by Period Name: halves build the per-minute match rate,
     # warm-up rows build the average warm-up load.
     period_name = gps["Period Name"].astype(str).str.lower()
-    is_warm = period_name.str.contains("warm", regex=False)
+    is_warm = period_name.str.contains(r"warm|wup", regex=True)
     is_half = period_name.str.contains(r"half|1st|2nd|first|second", regex=True) & ~is_warm
     gps_periods = gps[is_half | is_warm].copy()
 
