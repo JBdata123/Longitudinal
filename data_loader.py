@@ -50,8 +50,8 @@ def load_data(_cache_buster: int = 0):
     `_cache_buster` lets the manual Refresh button force an immediate reload
     regardless of the TTL.
 
-    gps_periods = every 1st-half / 2nd-half period row (warm-up excluded),
-    used for the match-minute reference lines."""
+    gps_periods = every 1st-half / 2nd-half / warm-up period row, used for
+    the match-minute reference lines."""
     cfg = st.secrets["dropbox"]
     dbx = _get_client()
     gps = _download_excel(dbx, cfg["gps_path"])       # e.g. "/GPS Dummy Data.xlsx"
@@ -65,12 +65,12 @@ def load_data(_cache_buster: int = 0):
     gps_day = gps[(gps["Period Number"] == 0) & (gps["Period Name"] == "Session")].copy()
     fb_day = fb[fb["Analysis period"] == "Measurement"].copy()
 
-    # Half-level rows (1st half / 2nd half), never warm-up.
+    # Half-level rows (1st half / 2nd half) PLUS warm-up rows. The app tells
+    # them apart by Period Name: halves build the per-minute match rate,
+    # warm-up rows build the average warm-up load.
     period_name = gps["Period Name"].astype(str).str.lower()
-    is_half = (
-        period_name.str.contains(r"half|1st|2nd|first|second", regex=True)
-        & ~period_name.str.contains("warm", regex=False)
-    )
-    gps_periods = gps[is_half].copy()
+    is_warm = period_name.str.contains("warm", regex=False)
+    is_half = period_name.str.contains(r"half|1st|2nd|first|second", regex=True) & ~is_warm
+    gps_periods = gps[is_half | is_warm].copy()
 
     return gps_day, fb_day, gps_periods
