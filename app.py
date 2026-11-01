@@ -210,8 +210,8 @@ PLAYER_METRICS = {
         "max": {"total_distance": 34200, "hsr_sd": 1293 + 92, "accel": 355, "decel": 327, "hr_hi": None, "accel_hi": 57, "decel_hi": 73},
     },
     "emma jansson": {
-        "avg": {"total_distance": 29812, "hsr_sd": 690 + 72, "accel": 290, "decel": 302, "hr_hi": None, "accel_hi": 45, "decel_hi": 48},
-        "max": {"total_distance": 33600, "hsr_sd": 1251 + 145, "accel": 393, "decel": 337, "hr_hi": None, "accel_hi": 67, "decel_hi": 71},
+        "avg": {"total_distance": 25713, "hsr_sd": 690 + 72, "accel": 260, "decel": 272, "hr_hi": None, "accel_hi": 31, "decel_hi": 44},
+        "max": {"total_distance": 29581, "hsr_sd": 1251 + 145, "accel": 363, "decel": 307, "hr_hi": None, "accel_hi": 63, "decel_hi": 67},
     },
     "celeste boureille": {
         "avg": {"total_distance": 28309, "hsr_sd": 721, "accel": 282, "decel": 242, "hr_hi": None, "accel_hi": 39, "decel_hi": 45},
