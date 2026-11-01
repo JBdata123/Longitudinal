@@ -459,6 +459,11 @@ def is_match_day(day_series):
     return day_series.astype(str).str.contains(_MATCH_DAY_RE)
 
 
+def is_warmup_period(period_name_series):
+    """Boolean Series: True for warm-up period rows ("Warm Up", "WUP", ...)."""
+    return period_name_series.astype(str).str.lower().str.contains(r"warm|wup", regex=True)
+
+
 def parse_match_minutes(text):
     """'30, 45 90' -> [30.0, 45.0, 90.0] (sorted, de-duplicated, positives only)."""
     out = set()
