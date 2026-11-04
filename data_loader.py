@@ -44,30 +44,19 @@ def _download_excel(dbx, path: str) -> pd.DataFrame:
 
 
 def _fix_gps_dates(col: pd.Series) -> pd.Series:
-    """Repairs the Date column of the GPS export.
+    """Reads the GPS Date column, which is a MIX of two things:
+    - real Excel dates (these are already correct, Excel just displays them
+      US-style as m/d/yyyy, e.g. 11/1/2026 is 1 November), and
+    - text dates typed as dd/mm/yyyy (e.g. "17/10/2026"), which Excel could not
+      read as a date because the day is above 12.
 
-    Dates typed as dd/mm/yyyy get half-converted by Excel: ones with a day
-    above 12 (e.g. 31/10/2026) can't be read as month/day, so they stay as
-    text, while ones with a day of 12 or below (e.g. 1/11/2026) get turned
-    into real dates with day and month swapped (11 Jan instead of 1 Nov).
-
-    - text values  -> parsed day-first
-    - real dates   -> day and month swapped back, but ONLY when the column is
-                      a mix of text and real dates (the sign of the problem);
-                      a column that is entirely real dates is left alone."""
-    is_text = col.apply(lambda v: isinstance(v, str))
-    if not is_text.any():
-        return pd.to_datetime(col)
-
+    Real dates are kept exactly as they are. Text dates are read day-first."""
     def fix(v):
         if isinstance(v, str):
             return pd.to_datetime(v.strip(), dayfirst=True, errors="coerce")
         if pd.isna(v):
             return pd.NaT
-        ts = pd.Timestamp(v)
-        if ts.day <= 12:
-            return pd.Timestamp(year=ts.year, month=ts.day, day=ts.month)
-        return ts.normalize()
+        return pd.Timestamp(v).normalize()
 
     return pd.to_datetime(col.apply(fix))
 
