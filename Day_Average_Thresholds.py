@@ -15,8 +15,8 @@ The measures
   * High Speed Distance      = velocity band 4 + band 5 distance
   * Total Distance
   * Acceleration / Deceleration Bands 1-3 Efforts
-  * Very High Speed Distance = velocity band 6 DISTANCE. Your GPS file needs that column. If it doesn't have it
-    (your database only keeps the band 6 effort COUNT), that one column is left blank and the page says so.
+  * Very High Speed Distance = the SD column in your GPS file (sprint distance). If that column is ever missing,
+    that one column is left blank and the page says so.
 
 The rules
   * SESSION rows only (the whole-session figures), one per player per day, in-season weeks only (week 1 up),
@@ -112,13 +112,12 @@ METRICS = [
     ("Total Distance", ("Total Distance",)),
     ("Acceleration Bands 1-3 Efforts", ("Acceleration B1-3 Total Efforts (Gen 2)",)),
     ("Deceleration Bands 1-3 Efforts", ("Deceleration B1-3 Total Efforts (Gen 2)",)),
-    ("Very High Speed Distance", ("Velocity Band 6 Total Distance",)),
+    ("Very High Speed Distance", ("SD",)),
 ]
 METRIC_NAMES = [name for name, _ in METRICS]
 OUT_COLUMNS = ["Athlete ID", "Athlete Name", "Position"] + METRIC_NAMES
 REQUIRED_COLUMNS = ["Player Name", "Date", "Period Name", "Week Number", "Day"]
 GPS_COLUMNS = REQUIRED_COLUMNS + [part for _, parts in METRICS for part in parts]
-BAND6_NAME = "Velocity Band 6 Total Distance"
 
 MODE_AVERAGE = "Day average"
 MODE_PLUS = "Day average + 1 standard deviation"
@@ -204,12 +203,6 @@ def build_csv(table):
 # ============================================================================
 # THE GPS FILE -> ONE ROW PER SESSION
 # ============================================================================
-def is_band6_distance(header):
-    """Any column that is band 6 DISTANCE, however it's worded (but not the band 6 effort COUNT)."""
-    text = str(header).strip().casefold()
-    return "band 6" in text and "distance" in text and "count" not in text and "effort" not in text
-
-
 def session_rows(gps):
     """From the raw GPS sheet: one row per SESSION row, with the five measures worked out. A measure's figure is blank
     if none of its columns are in the file. Returns (rows, number of unreadable dates, notes about missing columns)."""
@@ -228,9 +221,7 @@ def session_rows(gps):
         present = [p for p in parts if p in d.columns]
         if not present:
             out[name] = float("nan")
-            notes.append(f"{name} is blank because the GPS file has no '{parts[0]}' column"
-                         + (" (your database only keeps the band 6 effort count, not its distance, so add that distance to your Catapult export)"
-                            if name == "Very High Speed Distance" else "") + ".")
+            notes.append(f"{name} is blank because the GPS file has no '{parts[0]}' column.")
             continue
         if len(present) < len(parts):
             missing = [p for p in parts if p not in present]
@@ -363,19 +354,14 @@ def dropbox_client():
 
 
 def read_gps_table(content, path):
-    """Read only the columns we need from the GPS workbook. The band 6 distance column is found by what it is, not by
-    its exact wording, and is called 'Velocity Band 6 Total Distance' from here on."""
+    """Read only the columns we need from the GPS workbook (stray spaces in the headings are tolerated)."""
     wanted = set(GPS_COLUMNS)
-    keep = lambda column: str(column).strip() in wanted or is_band6_distance(column)
+    keep = lambda column: str(column).strip() in wanted
     if str(path).lower().endswith((".csv", ".txt")):
         df = pd.read_csv(io.BytesIO(content), usecols=keep)
     else:
         df = pd.read_excel(io.BytesIO(content), usecols=keep)
     df.columns = [str(c).strip() for c in df.columns]
-    if BAND6_NAME not in df.columns:
-        found = [c for c in df.columns if is_band6_distance(c)]
-        if found:
-            df = df.rename(columns={found[0]: BAND6_NAME})
     return df
 
 
