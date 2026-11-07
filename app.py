@@ -376,17 +376,18 @@ _FALLBACK_COLS = [
     "Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD",
     "Acceleration B1-3 Total Efforts (Gen 2)", "Acceleration B2-3 Total Efforts (Gen 2)",
     "Deceleration B1-3 Total Efforts (Gen 2)", "Deceleration B2-3 Total Efforts (Gen 2)",
+    "Total Jumps", "Dive Left Count", "Dive Centre Count", "Dive Right Count",
 ]
 _FALLBACK_ROWS = {
     "celeste boureille": [
-        ("Celeste Boureille", "WUP",      "2025-12-07", "00:32:43", 2413.01001, 19.25, 0,     0,     27, 4,  16, 1),
-        ("Celeste Boureille", "1st Half", "2025-12-07", "00:54:19", 4618.62744, 74.91, 0,     0,     32, 2,  38, 7),
-        ("Celeste Boureille", "2nd Half", "2025-12-07", "00:51:57", 4498.51221, 89.19, 23.88, 16.67, 30, 3,  34, 10),
+        ("Celeste Boureille", "WUP",      "2025-12-07", "00:32:43", 2413.01001, 19.25, 0,     0,     27, 4,  16, 1,  5, 0, 0, 0),
+        ("Celeste Boureille", "1st Half", "2025-12-07", "00:54:19", 4618.62744, 74.91, 0,     0,     32, 2,  38, 7,  4, 0, 0, 0),
+        ("Celeste Boureille", "2nd Half", "2025-12-07", "00:51:57", 4498.51221, 89.19, 23.88, 16.67, 30, 3,  34, 10, 4, 0, 0, 0),
     ],
     "emma jansson": [
-        ("Emma Jansson", "WUP",      "2026-05-03", "00:34:50", 2571.42554, 11.76,  0,     0,    34, 7,  31, 6),
-        ("Emma Jansson", "1st Half", "2026-05-03", "00:49:04", 5385.03027, 224.89, 59.48, 8.78, 49, 4,  56, 14),
-        ("Emma Jansson", "2nd Half", "2026-05-03", "00:52:02", 5375.85986, 215.47, 39.17, 0,    51, 12, 43, 10),
+        ("Emma Jansson", "WUP",      "2026-05-03", "00:34:50", 2571.42554, 11.76,  0,     0,    34, 7,  31, 6,  1, 0, 0, 0),
+        ("Emma Jansson", "1st Half", "2026-05-03", "00:49:04", 5385.03027, 224.89, 59.48, 8.78, 49, 4,  56, 14, 4, 0, 0, 0),
+        ("Emma Jansson", "2nd Half", "2026-05-03", "00:52:02", 5375.85986, 215.47, 39.17, 0,    51, 12, 43, 10, 2, 0, 0, 0),
     ],
 }
 LAST_SEASON_MATCHES = {}
@@ -447,12 +448,19 @@ def _wu(cols):
     return charts.warmup_avg(warm_md, cols) if include_wu else None
 
 
+_JUMPS = ["Total Jumps"]
+_DIVES = ["Dive Left Count", "Dive Centre Count", "Dive Right Count"]
+rate_jumps = charts.match_rate_per_min(halves_md, _JUMPS)
+rate_dives = charts.match_rate_per_min(halves_md, _DIVES)
+
 lines_td = charts.match_lines(rate_td, match_minutes, warmup=_wu(["Total Distance"]))
 lines_hsr_sd = charts.match_lines(rate_hsr_sd, match_minutes, warmup=_wu(_HSR_SD_COLS))
 lines_acc_13 = charts.match_lines(rate_acc_13, match_minutes, warmup=_wu(_ACC13))
 lines_dec_13 = charts.match_lines(rate_dec_13, match_minutes, warmup=_wu(_DEC13))
 lines_acc_23 = charts.match_lines(rate_acc_23, match_minutes, warmup=_wu(_ACC23))
 lines_dec_23 = charts.match_lines(rate_dec_23, match_minutes, warmup=_wu(_DEC23))
+lines_jumps = charts.match_lines(rate_jumps, match_minutes, warmup=_wu(_JUMPS))
+lines_dives = charts.match_lines(rate_dives, match_minutes, warmup=_wu(_DIVES))
 
 if match_minutes and using_last_season:
     _gd = halves_md["Date"].min().strftime("%d/%m/%Y")
@@ -518,7 +526,7 @@ else:
     )
 
 # ---------------------------------------------------------------- jumps / dives
-def gk_panel(title, col, key, color, legend):
+def gk_panel(title, col, key, color, legend, match_lines=None):
     if col not in gps_player_display.columns:
         st.info(f"No '{col}' column found in the GPS data, so {title} can't be shown.")
         return
@@ -528,17 +536,17 @@ def gk_panel(title, col, key, color, legend):
         return
     render_panel(
         title,
-        charts.chart_daily_count(gps_player_display, col, color, title),
+        charts.chart_daily_count(gps_player_display, col, color, title, match_lines=match_lines),
         key=key,
         legend_items=legend,
     )
 
 
-gk_panel("Jumps", "Total Jumps", "chart_jumps", charts.GREEN, charts.LEGEND_JUMPS)
+gk_panel("Jumps", "Total Jumps", "chart_jumps", charts.GREEN, charts.LEGEND_JUMPS, match_lines=lines_jumps)
 # Dives = left + centre + right dive counts added together
 dive_cols = ["Dive Left Count", "Dive Centre Count", "Dive Right Count"]
 if all(c in gps_player_display.columns for c in dive_cols):
     gps_player_display["Dives (L+C+R)"] = (
         gps_player_display[dive_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
     )
-gk_panel("Dives", "Dives (L+C+R)", "chart_dives", charts.GOLD, charts.LEGEND_DIVES)
+gk_panel("Dives", "Dives (L+C+R)", "chart_dives", charts.GOLD, charts.LEGEND_DIVES, match_lines=lines_dives)
