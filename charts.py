@@ -755,7 +755,8 @@ def chart_hr_zones(fb_player: pd.DataFrame) -> go.Figure:
 
 
 # ---------------------------------------------------------------- Simple daily count chart (dives / saves)
-def chart_daily_count(gps_player: pd.DataFrame, col: str, color: str, name: str) -> go.Figure:
+def chart_daily_count(gps_player: pd.DataFrame, col: str, color: str, name: str,
+                      match_lines=None) -> go.Figure:
     """One bar per calendar date for a simple count metric, value printed on
     top, blank on days with no data (same look as the other daily charts)."""
     x = _x_labels(gps_player)
@@ -773,7 +774,11 @@ def chart_daily_count(gps_player: pd.DataFrame, col: str, color: str, name: str)
     fig.update_layout(bargap=_bargap_for(len(x)))
     fig = base_layout(fig, n_dates=len(x))
     top = vals.max() if len(vals) else 0
+    lines = [l for l in (match_lines or []) if l[1] > 0]   # skip zero-value lines
+    if lines:
+        top = max(top, max(l[1] for l in lines))
     fig.update_layout(yaxis=dict(visible=False, range=[0, (top if top > 0 else 1) / 0.8]))
+    add_match_lines(fig, lines, color)
     return fig
 
 
