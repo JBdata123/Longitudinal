@@ -6,7 +6,7 @@ import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
 from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar, legend_row
-from data_loader import load_data, CACHE_TTL_SECONDS
+from data_loader import load_data, load_player_status, CACHE_TTL_SECONDS
 import charts
 
 st.set_page_config(page_title="LCWFC Longitudinal Report", layout="wide")
@@ -396,6 +396,69 @@ for _k, _rows in _FALLBACK_ROWS.items():
     _df["Date"] = pd.to_datetime(_df["Date"])
     LAST_SEASON_MATCHES[_k] = _df
 
+
+# ---------------------------------------------------------------- day-type average boxes
+# Average per session for each type of day. Respects the week-range slider above.
+# MD = the 1st + 2nd half only; "MD + Warm-up" = the same matches with their warm-up added.
+_daily_b = gps_player_full
+if selected_weeks is not None:
+    _daily_b = gps_player_full[pd.to_numeric(gps_player_full["Week Number"], errors="coerce").isin(selected_weeks)]
+
+# Optional filter: only count days where the player_status file says "fit".
+fit_only = st.checkbox("Only count days where player status = Fit", value=True, key="fit_only")
+_status_df, _status_msg = load_player_status(st.session_state.cache_buster)
+_fit_dates, _fit_note = None, ""
+if fit_only:
+    if _status_msg:
+        _fit_note = _status_msg
+    else:
+        _ps = _status_df[_status_df["name_key"] == " ".join(player.lower().split())]
+        if _ps.empty:
+            _fit_note = f"No rows for {player} in the player status file, so all days are counted."
+        else:
+            _fit_dates = set(_ps.loc[_ps["Fit"], "Date"])
+            _status_dates = set(_ps["Date"])
+if _fit_dates is not None:
+    _lab_set = {"ACTIVATION", "EXTENSIVE", "INTENSIVE", "MD-1"}
+    _pre = _daily_b[_daily_b["Day"].apply(charts._norm_day).isin(_lab_set)]
+    _no_status = int((~_pre["Date"].isin(_status_dates)).sum())
+    _daily_b = _daily_b[_daily_b["Date"].isin(_fit_dates)]
+    _after = int(_daily_b["Day"].apply(charts._norm_day).isin(_lab_set).sum())
+    _fit_note = f"fit days only: {_after} of {len(_pre)} sessions counted" + (
+        f" ({_no_status} had no status row)" if _no_status else "")
+
+_pp = gps_periods[gps_periods["Player Name"] == player]
+_md_dates_b = set(gps_player_full.loc[charts.is_match_day(gps_player_full["Day"]), "Date"])
+_pp_md = _pp[charts.is_match_day(_pp["Day"]) | _pp["Date"].isin(_md_dates_b)]
+if selected_weeks is not None and "Week Number" in _pp_md.columns:
+    _pp_md = _pp_md[pd.to_numeric(_pp_md["Week Number"], errors="coerce").isin(selected_weeks)]
+if _fit_dates is not None:
+    _pp_md = _pp_md[_pp_md["Date"].isin(_fit_dates)]
+_pp_warm = charts.is_warmup_period(_pp_md["Period Name"])
+_halves_b, _warm_b = _pp_md[~_pp_warm], _pp_md[_pp_warm]
+
+_md_note = ""
+if _halves_b.empty and player_key in LAST_SEASON_MATCHES:      # no games yet this season
+    _fb_b = LAST_SEASON_MATCHES[player_key]
+    _fb_w = charts.is_warmup_period(_fb_b["Period Name"])
+    _halves_b, _warm_b = _fb_b[~_fb_w], _fb_b[_fb_w]
+    _md_note = "last season"
+
+_day_boxes = []
+for _title, _label in [("Activation", "ACTIVATION"), ("Extensive", "EXTENSIVE"),
+                       ("Intensive", "INTENSIVE"), ("MD-1", "MD-1")]:
+    _st, _n = charts.day_type_stats(_daily_b, _label)
+    _day_boxes.append((_title, _st, _n, ""))
+_st, _n = charts.match_day_stats(_halves_b)
+_day_boxes.append(("MD", _st, _n, _md_note))
+_st, _n = charts.match_day_stats(_halves_b, _warm_b)
+_day_boxes.append(("MD + Warm-up", _st, _n, _md_note))
+
+st.caption("Average per day type (follows the week range above)" + (f" \u00b7 {_fit_note}" if _fit_note else ""))
+for _col, (_title, _st, _n, _note) in zip(st.columns(6), _day_boxes):
+    with _col:
+        st.markdown(metric_title_bar(_title), unsafe_allow_html=True)
+        st.markdown(charts.day_box_html(_st, _n, _note), unsafe_allow_html=True)
 
 # ---------------------------------------------------------------- match-minute reference lines
 mm_col, wu_col, _spacer = st.columns([2, 2, 3])
