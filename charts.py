@@ -448,6 +448,93 @@ def chart_weekly_max_velocity(gps_full_history: pd.DataFrame, avg_value=None,
     return fig
 
 
+# ---------------------------------------------------------------- Day-type average boxes
+# (label, columns that are added together, number format, unit)
+BOX_METRICS = [
+    ("Total Distance", ["Total Distance"], "{:,.0f}", " m"),
+    ("Metres / min", ["Meterage Per Minute"], "{:.1f}", ""),
+    ("HSR + SD", ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"], "{:,.0f}", " m"),
+    ("Accels (1-3)", ["Acceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
+    ("Decels (1-3)", ["Deceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
+    ("Max Speed", ["Maximum Velocity"], "{:.1f}", ""),
+]
+
+
+def _norm_day(v):
+    return str(v).replace(" ", "").upper()
+
+
+def _row_sum(df, cols):
+    """Per-row total of `cols`; NaN only if every one of them is missing."""
+    vals = df[cols].apply(pd.to_numeric, errors="coerce")
+    return vals.sum(axis=1, min_count=1)
+
+
+def day_type_stats(daily_df, day_label):
+    """Average per session for one Day type (e.g. "ACTIVATION", "MD-1").
+    Returns ({metric label: value or None}, number of days)."""
+    if daily_df is None or daily_df.empty or "Day" not in daily_df.columns:
+        return {}, 0
+    sub = daily_df[daily_df["Day"].apply(_norm_day) == _norm_day(day_label)]
+    if sub.empty:
+        return {}, 0
+    stats = {}
+    for label, cols, _fmt, _unit in BOX_METRICS:
+        if any(c not in sub.columns for c in cols):
+            stats[label] = None
+            continue
+        v = _row_sum(sub, cols).mean()
+        stats[label] = None if pd.isna(v) else float(v)
+    return stats, len(sub)
+
+
+def match_day_stats(halves_df, warm_df=None):
+    """Average per matchday from the 1st + 2nd half rows (warm-up excluded).
+    If warm_df is given, that day's warm-up is added on (only for dates the
+    player actually played). Returns ({metric: value or None}, number of matches)."""
+    if halves_df is None or halves_df.empty or "Date" not in halves_df.columns:
+        return {}, 0
+    dates = halves_df["Date"].unique()
+    rows = halves_df
+    if warm_df is not None and not warm_df.empty:
+        rows = pd.concat([halves_df, warm_df[warm_df["Date"].isin(dates)]], ignore_index=True)
+    stats = {}
+    for label, cols, _fmt, _unit in BOX_METRICS:
+        if label == "Metres / min":
+            stats[label] = match_rate_per_min(rows, ["Total Distance"])
+            continue
+        if any(c not in rows.columns for c in cols):
+            stats[label] = None
+            continue
+        per_row = _row_sum(rows, cols)
+        per_day = per_row.groupby(rows["Date"]).max() if label == "Max Speed" else per_row.groupby(rows["Date"]).sum(min_count=1)
+        v = per_day.mean()
+        stats[label] = None if pd.isna(v) else float(v)
+    return stats, len(dates)
+
+
+def day_box_html(stats, n, unit_note=""):
+    """Navy body of one day-type box (the white title bar is drawn separately)."""
+    rows = ""
+    for label, _cols, fmt, unit in BOX_METRICS:
+        v = (stats or {}).get(label)
+        text = "\u2014" if v is None or pd.isna(v) else fmt.format(v) + unit
+        rows += (
+            f'<div style="display:flex;justify-content:space-between;align-items:baseline;'
+            f'padding:5px 0;border-bottom:1px solid rgba(255,255,255,0.15);">'
+            f'<span style="color:{WHITE};font-family:{FONT};font-size:12px;opacity:0.85;">{label}</span>'
+            f'<span style="color:{WHITE};font-family:{FONT};font-size:15px;font-weight:700;">{text}</span></div>'
+        )
+    foot = f"{n} day{'s' if n != 1 else ''}" if n else "no data"
+    if unit_note:
+        foot += f" \u00b7 {unit_note}"
+    return (
+        f'<div style="background-color:{NAVY};padding:8px 12px 6px 12px;">{rows}'
+        f'<div style="color:{GOLD};font-family:{FONT};font-size:11px;font-weight:600;'
+        f'text-align:center;padding-top:6px;">{foot}</div></div>'
+    )
+
+
 # ---------------------------------------------------------------- Match-minute reference lines
 # A Day label counts as a match if it contains "GAME", or "MD" on its own.
 # "MD-1" / "MD+1" style labels (the days either side of a match) are NOT matches.
