@@ -1,0 +1,235 @@
+"""
+Daily overview - a separate, simple Streamlit app that shows four of the daily
+charts from the Longitudinal Report in a 2x2 grid (Total Distance, HSR + SD,
+Accelerations | Decelerations, Max Speed). Daily bars only - no weekly tiles.
+
+Deploy it as its own app on Streamlit Cloud: same repo, main file
+`overview_app.py`, same Secrets as the longitudinal app. It re-uses
+charts.py, theme.py and data_loader.py, so the charts look identical.
+"""
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import pandas as pd
+import streamlit as st
+from streamlit_autorefresh import st_autorefresh
+
+from theme import NAVY, GOLD, WHITE, FONT, metric_title_bar, legend_row
+from data_loader import load_data, CACHE_TTL_SECONDS
+import charts
+
+st.set_page_config(page_title="LCWFC Daily Overview", layout="wide")
+
+# ---------------------------------------------------------------- global CSS
+st.markdown(f"""
+<style>
+    .stApp {{ background-color: {WHITE}; }}
+    #MainMenu, footer {{visibility: hidden;}}
+    div.block-container {{ padding-top: 0rem; }}
+    /* ---- header bar (navy, gold underline) ---- */
+    .st-key-header_bar {{
+        background-color: {NAVY} !important;
+        border: none !important;
+        border-bottom: 5px solid {GOLD} !important;
+        border-radius: 0 !important;
+        padding: 10px 24px 20px 24px !important;
+        box-shadow: none !important;
+    }}
+    .st-key-header_bar div[data-testid="stHorizontalBlock"] {{
+        align-items: center !important;
+    }}
+    .st-key-header_bar, .st-key-header_bar * {{
+        color: {WHITE} !important;
+    }}
+    .st-key-header_bar label, .st-key-header_bar p {{
+        color: {WHITE} !important;
+        font-family: {FONT};
+    }}
+    .st-key-header_bar [data-testid="stWidgetLabel"] {{
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }}
+    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] * {{
+        background-color: {NAVY} !important;
+        color: {WHITE} !important;
+        -webkit-text-fill-color: {WHITE} !important;
+        border-color: {WHITE} !important;
+        fill: {WHITE} !important;
+    }}
+    .st-key-header_bar.st-key-header_bar.st-key-header_bar div[data-testid="stSelectbox"] svg {{
+        display: none !important;
+    }}
+    div[data-baseweb="popover"] ul[role="listbox"] {{
+        background-color: {NAVY} !important;
+    }}
+    div[data-baseweb="popover"] li {{
+        background-color: {NAVY} !important;
+        color: {WHITE} !important;
+    }}
+    div[data-baseweb="popover"] li:hover {{
+        background-color: {GOLD} !important;
+        color: {NAVY} !important;
+    }}
+    .st-key-header_bar div[data-baseweb="slider"] div[role="slider"] {{
+        background-color: {GOLD} !important;
+    }}
+    .st-key-header_bar div[data-testid="stTickBar"] {{ color: {WHITE} !important; }}
+    .st-key-header_bar .stButton > button {{
+        background-color: {NAVY} !important;
+        color: {WHITE} !important;
+        border: 1px solid {WHITE} !important;
+    }}
+    .st-key-header_bar .stButton > button:hover,
+    .st-key-header_bar .stButton > button:active,
+    .st-key-header_bar .stButton > button:focus,
+    .st-key-header_bar .stButton > button:focus:not(:active) {{
+        background-color: {NAVY} !important;
+        color: {WHITE} !important;
+        border: 1px solid {WHITE} !important;
+        box-shadow: none !important;
+    }}
+    .st-key-header_bar div[data-testid="stHorizontalBlock"] > div:last-child {{
+        display: flex !important;
+        justify-content: flex-end !important;
+    }}
+    .st-key-refresh_box {{
+        border: none !important;
+        box-shadow: none !important;
+        padding: 0 !important;
+        background: transparent !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        width: fit-content !important;
+        margin-left: auto !important;
+        margin-right: 0 !important;
+    }}
+    .st-key-refresh_box .stButton {{
+        width: fit-content !important;
+    }}
+    h1, h2, h3 {{ text-align: center; }}
+</style>
+""", unsafe_allow_html=True)
+
+# ---------------------------------------------------------------- auto refresh every 60s
+st_autorefresh(interval=CACHE_TTL_SECONDS * 1000, key="auto_refresh_overview")
+
+if "cache_buster" not in st.session_state:
+    st.session_state.cache_buster = 0
+
+# ---------------------------------------------------------------- load data
+try:
+    gps_day, _fb_day, _gps_periods = load_data(st.session_state.cache_buster)
+except Exception as e:
+    st.error(f"Couldn't load data from Dropbox: {e}")
+    st.info("Check .streamlit/secrets.toml has valid Dropbox credentials and file paths.")
+    st.stop()
+
+players = sorted(gps_day["Player Name"].dropna().unique())
+min_date = gps_day["Date"].min().date()
+max_date = gps_day["Date"].max().date()
+
+# ---------------------------------------------------------------- header bar
+with st.container(key="header_bar", border=True):
+    st.markdown(
+        "<div style='font-size:40px; font-weight:800; letter-spacing:1px; "
+        "text-align:center; padding:4px 0 10px 0;'>DAILY OVERVIEW</div>",
+        unsafe_allow_html=True,
+    )
+    player_col, slider_col, refresh_col = st.columns([1.6, 3.2, 1.6])
+    with player_col:
+        player = st.selectbox("Player Name dropdown", players)
+    with slider_col:
+        date_range = st.slider(
+            "Date range", min_value=min_date, max_value=max_date,
+            value=(min_date, max_date), format="DD/MM",
+        )
+    with refresh_col:
+        with st.container(key="refresh_box", border=True):
+            if st.button("🔄 Refresh data now"):
+                st.session_state.cache_buster += 1
+                load_data.clear()
+                st.rerun()
+            st.markdown(
+                f"<div style='font-size:10.5px; opacity:0.85; margin-top:4px; "
+                f"margin-bottom:2px; white-space:nowrap; text-align:center;'>"
+                f"Auto-refreshes every {CACHE_TTL_SECONDS}s · last loaded {datetime.now(ZoneInfo('Europe/London')).strftime('%H:%M:%S')} UK</div>",
+                unsafe_allow_html=True,
+            )
+
+start_date, end_date = date_range
+
+# ---------------------------------------------------------------- filter data
+gps_player_full = gps_day[gps_day["Player Name"] == player].sort_values("Date")
+
+mask = (gps_player_full["Date"].dt.date >= start_date) & (gps_player_full["Date"].dt.date <= end_date)
+gps_player_all = gps_player_full[mask]
+
+if gps_player_all.empty:
+    st.warning("No GPS data found for this player in the selected date range.")
+    st.stop()
+
+# one row per CALENDAR date in the selected range (rest days show as empty bars)
+full_calendar = pd.DataFrame({"Date": pd.date_range(start_date, end_date, freq="D")})
+gps_player_display = full_calendar.merge(gps_player_all, on="Date", how="left")
+
+
+# ---------------------------------------------------------------- shared panel renderer
+def render_panel(title, fig, key, legend_items=None, box_note=None):
+    st.markdown(metric_title_bar(title), unsafe_allow_html=True)
+    if legend_items:
+        st.markdown(legend_row(legend_items, box_note=box_note), unsafe_allow_html=True)
+    plot_config = {
+        "displayModeBar": True,
+        "displaylogo": False,
+        "modeBarButtonsToRemove": [
+            "zoom2d", "pan2d", "select2d", "lasso2d", "zoomIn2d", "zoomOut2d",
+            "autoScale2d", "resetScale2d", "hoverClosestCartesian",
+            "hoverCompareCartesian", "toggleSpikelines",
+        ],
+        "toImageButtonOptions": {"format": "png", "filename": key, "scale": 2},
+    }
+    st.plotly_chart(fig, width="stretch", config=plot_config, key=key, theme=None)
+
+
+# ---------------------------------------------------------------- 2 x 2 grid of daily charts
+top_left, top_right = st.columns(2)
+with top_left:
+    render_panel(
+        "Total Distance | Metres per Minute",
+        charts.chart_total_distance(gps_player_display, gps_player_full),
+        key="ov_total_distance",
+        legend_items=charts.LEGEND_TOTAL_DISTANCE,
+        box_note="ACWR",
+    )
+with top_right:
+    render_panel(
+        "HSR (Velocity Band 4 + 5) | Sprint Distance",
+        charts.chart_hsr_sd(gps_player_display, gps_player_full),
+        key="ov_hsr_sd",
+        legend_items=charts.LEGEND_HSR_SD,
+        box_note="ACWR",
+    )
+
+bottom_left, bottom_right = st.columns(2)
+with bottom_left:
+    # for the 2-3 version, swap "B1-3" for "B2-3" in both column names and use legend_accel_decel("2-3")
+    render_panel(
+        "Accelerations (1-3) | Decelerations (1-3)",
+        charts.chart_accel_decel(
+            gps_player_display, gps_player_full,
+            "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+        ),
+        key="ov_accel_decel",
+        legend_items=charts.legend_accel_decel("1-3"),
+        box_note="ACWR",
+    )
+with bottom_right:
+    render_panel(
+        "Max Speed | Max Speed %",
+        charts.chart_max_speed(gps_player_display, gps_player_full),
+        key="ov_max_speed",
+        legend_items=charts.LEGEND_MAX_SPEED,
+        box_note="Days Since 90%+",
+    )
