@@ -462,7 +462,7 @@ if _halves_b.empty and player_key in LAST_SEASON_MATCHES:      # no games yet th
     _fb_b = LAST_SEASON_MATCHES[player_key]
     _fb_w = charts.is_warmup_period(_fb_b["Period Name"])
     _halves_b, _warm_b = _fb_b[~_fb_w], _fb_b[_fb_w]
-    _md_note = "last season"
+    _md_note = ""   # (was "last season" - the note under the MD boxes has been removed)
 
 _day_boxes = []
 for _title, _label in [("Activation", "ACTIVATION"), ("Extensive", "EXTENSIVE"),
