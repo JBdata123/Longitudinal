@@ -456,8 +456,6 @@ BOX_METRICS = [
     ("Sprint Distance", ["SD"], "{:,.0f}", " m"),
     ("Accels (1-3)", ["Acceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
     ("Decels (1-3)", ["Deceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
-    ("Accels (2-3)", ["Acceleration B2-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
-    ("Decels (2-3)", ["Deceleration B2-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
 ]
 
 
