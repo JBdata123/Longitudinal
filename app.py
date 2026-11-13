@@ -397,6 +397,26 @@ for _k, _rows in _FALLBACK_ROWS.items():
     LAST_SEASON_MATCHES[_k] = _df
 
 
+# ---------------------------------------------------------------- manually entered day-type averages
+# For players returning from injury: these figures are shown in the Activation /
+# Extensive / Intensive / MD-1 boxes INSTEAD of working them out from the sheet.
+# (HSR = their HSR figure, Sprint Distance = their VHSR / SD figure.)
+# To go back to automatic for a player, delete their entry.
+MANUAL_DAY_AVERAGES = {
+    "celeste boureille": {
+        "ACTIVATION": {"Total Distance": 3973, "HSR": 3,   "Sprint Distance": 0,  "Accels (1-3)": 36, "Decels (1-3)": 44},
+        "EXTENSIVE":  {"Total Distance": 6975, "HSR": 352, "Sprint Distance": 61, "Accels (1-3)": 70, "Decels (1-3)": 63},
+        "INTENSIVE":  {"Total Distance": 5613, "HSR": 116, "Sprint Distance": 2,  "Accels (1-3)": 62, "Decels (1-3)": 45},
+        "MD-1":       {"Total Distance": 3334, "HSR": 15,  "Sprint Distance": 0,  "Accels (1-3)": 35, "Decels (1-3)": 27},
+    },
+    "emma jansson": {
+        "ACTIVATION": {"Total Distance": 3902, "HSR": 0,   "Sprint Distance": 0,  "Accels (1-3)": 32, "Decels (1-3)": 22},
+        "EXTENSIVE":  {"Total Distance": 6295, "HSR": 298, "Sprint Distance": 61, "Accels (1-3)": 60, "Decels (1-3)": 42},
+        "INTENSIVE":  {"Total Distance": 5741, "HSR": 218, "Sprint Distance": 0,  "Accels (1-3)": 68, "Decels (1-3)": 52},
+        "MD-1":       {"Total Distance": 4574, "HSR": 41,  "Sprint Distance": 0,  "Accels (1-3)": 65, "Decels (1-3)": 37},
+    },
+}
+
 # ---------------------------------------------------------------- day-type average boxes
 # Average per session for each type of day. Respects the week-range slider above.
 # MD = the 1st + 2nd half only; "MD + Warm-up" = the same matches with their warm-up added.
@@ -448,12 +468,15 @@ _day_boxes = []
 for _title, _label in [("Activation", "ACTIVATION"), ("Extensive", "EXTENSIVE"),
                        ("Intensive", "INTENSIVE"), ("MD-1", "MD-1")]:
     _st, _n = charts.day_type_stats(_daily_b, _label)
+    _st = MANUAL_DAY_AVERAGES.get(player_key, {}).get(_label, _st)   # manual figures win, if entered
     _day_boxes.append((_title, _st, _n, ""))
 _st, _n = charts.match_day_stats(_halves_b)
 _day_boxes.append(("MD", _st, _n, _md_note))
 _st, _n = charts.match_day_stats(_halves_b, _warm_b)
 _day_boxes.append(("MD + Warm-up", _st, _n, _md_note))
 
+if player_key in MANUAL_DAY_AVERAGES:
+    _fit_note = "Activation, Extensive, Intensive and MD-1 use manually entered averages"
 st.caption("Average per day type (follows the week range above)" + (f" \u00b7 {_fit_note}" if _fit_note else ""))
 for _col, (_title, _st, _n, _note) in zip(st.columns(6), _day_boxes):
     with _col:
