@@ -452,11 +452,12 @@ def chart_weekly_max_velocity(gps_full_history: pd.DataFrame, avg_value=None,
 # (label, columns that are added together, number format, unit)
 BOX_METRICS = [
     ("Total Distance", ["Total Distance"], "{:,.0f}", " m"),
-    ("Metres / min", ["Meterage Per Minute"], "{:.1f}", ""),
-    ("HSR + SD", ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance", "SD"], "{:,.0f}", " m"),
+    ("HSR", ["Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance"], "{:,.0f}", " m"),
+    ("Sprint Distance", ["SD"], "{:,.0f}", " m"),
     ("Accels (1-3)", ["Acceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
     ("Decels (1-3)", ["Deceleration B1-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
-    ("Max Speed", ["Maximum Velocity"], "{:.1f}", ""),
+    ("Accels (2-3)", ["Acceleration B2-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
+    ("Decels (2-3)", ["Deceleration B2-3 Total Efforts (Gen 2)"], "{:.0f}", ""),
 ]
 
 
@@ -500,14 +501,10 @@ def match_day_stats(halves_df, warm_df=None):
         rows = pd.concat([halves_df, warm_df[warm_df["Date"].isin(dates)]], ignore_index=True)
     stats = {}
     for label, cols, _fmt, _unit in BOX_METRICS:
-        if label == "Metres / min":
-            stats[label] = match_rate_per_min(rows, ["Total Distance"])
-            continue
         if any(c not in rows.columns for c in cols):
             stats[label] = None
             continue
-        per_row = _row_sum(rows, cols)
-        per_day = per_row.groupby(rows["Date"]).max() if label == "Max Speed" else per_row.groupby(rows["Date"]).sum(min_count=1)
+        per_day = _row_sum(rows, cols).groupby(rows["Date"]).sum(min_count=1)
         v = per_day.mean()
         stats[label] = None if pd.isna(v) else float(v)
     return stats, len(dates)
@@ -525,14 +522,11 @@ def day_box_html(stats, n, unit_note=""):
             f'<span style="color:{WHITE};font-family:{FONT};font-size:12px;opacity:0.85;">{label}</span>'
             f'<span style="color:{WHITE};font-family:{FONT};font-size:15px;font-weight:700;">{text}</span></div>'
         )
-    foot = f"{n} day{'s' if n != 1 else ''}" if n else "no data"
+    foot = ""
     if unit_note:
-        foot += f" \u00b7 {unit_note}"
-    return (
-        f'<div style="background-color:{NAVY};padding:8px 12px 6px 12px;">{rows}'
-        f'<div style="color:{GOLD};font-family:{FONT};font-size:11px;font-weight:600;'
-        f'text-align:center;padding-top:6px;">{foot}</div></div>'
-    )
+        foot = (f'<div style="color:{GOLD};font-family:{FONT};font-size:11px;font-weight:600;'
+                f'text-align:center;padding-top:6px;">{unit_note}</div>')
+    return f'<div style="background-color:{NAVY};padding:8px 12px 6px 12px;">{rows}{foot}</div>'
 
 
 # ---------------------------------------------------------------- Match-minute reference lines
