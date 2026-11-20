@@ -1,7 +1,9 @@
 """
 Daily overview - a separate, simple Streamlit app that shows four of the daily
-charts from the Longitudinal Report in a 2x2 grid (Total Distance, HSR + SD,
-Accelerations | Decelerations, Max Speed). Daily bars only - no weekly tiles.
+charts from the Longitudinal Report in a 2x2 grid. Daily bars only - no weekly
+tiles. A switch under the header flips between two views:
+  - Outfield:   Total Distance, HSR + SD, Accelerations | Decelerations, Max Speed
+  - Goalkeeper: Total Distance, Accelerations | Decelerations, Dives, Jumps
 
 Deploy it as its own app on Streamlit Cloud: same repo, main file
 `overview_app.py`, same Secrets as the longitudinal app. It re-uses
@@ -109,6 +111,31 @@ st.markdown(f"""
         width: fit-content !important;
     }}
     h1, h2, h3 {{ text-align: center; }}
+    /* ---- view switch (Outfield / Goalkeeper) ---- */
+    .st-key-view_switch div[role="radiogroup"] {{
+        justify-content: center;
+        gap: 12px;
+    }}
+    .st-key-view_switch div[role="radiogroup"] label {{
+        background-color: {WHITE};
+        border: 2px solid {NAVY};
+        border-radius: 6px;
+        padding: 6px 22px;
+        cursor: pointer;
+    }}
+    .st-key-view_switch div[role="radiogroup"] label > div:first-child {{ display: none; }}
+    .st-key-view_switch div[role="radiogroup"] label p {{
+        color: {NAVY} !important;
+        font-family: {FONT};
+        font-weight: 700;
+        font-size: 15px;
+    }}
+    .st-key-view_switch div[role="radiogroup"] label:has(input:checked) {{
+        background-color: {NAVY};
+    }}
+    .st-key-view_switch div[role="radiogroup"] label:has(input:checked) p {{
+        color: {GOLD} !important;
+    }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -160,8 +187,23 @@ with st.container(key="header_bar", border=True):
 
 start_date, end_date = date_range
 
+# ---------------------------------------------------------------- view switch
+with st.container(key="view_switch"):
+    view = st.radio(
+        "View", ["Outfield", "Goalkeeper"], horizontal=True,
+        label_visibility="collapsed", key="overview_view",
+    )
+
 # ---------------------------------------------------------------- filter data
 gps_player_full = gps_day[gps_day["Player Name"] == player].sort_values("Date")
+
+# Dives = left + centre + right dive counts added together (used in the goalkeeper view)
+_dive_cols = ["Dive Left Count", "Dive Centre Count", "Dive Right Count"]
+if all(c in gps_player_full.columns for c in _dive_cols):
+    gps_player_full = gps_player_full.copy()
+    gps_player_full["Dives (L+C+R)"] = (
+        gps_player_full[_dive_cols].apply(pd.to_numeric, errors="coerce").sum(axis=1, min_count=1)
+    )
 
 mask = (gps_player_full["Date"].dt.date >= start_date) & (gps_player_full["Date"].dt.date <= end_date)
 gps_player_all = gps_player_full[mask]
@@ -194,42 +236,88 @@ def render_panel(title, fig, key, legend_items=None, box_note=None):
 
 
 # ---------------------------------------------------------------- 2 x 2 grid of daily charts
-top_left, top_right = st.columns(2)
-with top_left:
+def count_panel(title, col, key, color, legend):
+    """Daily bar chart for a simple count column (dives / jumps). Shows a short
+    note instead if the column is missing or the player has none recorded."""
+    if col not in gps_player_display.columns:
+        st.info(f"No '{col}' data in the GPS sheet, so {title} can't be shown.")
+        return
+    if not (pd.to_numeric(gps_player_display[col], errors="coerce").fillna(0) > 0).any():
+        st.info(f"No {title.lower()} recorded for this player in the selected date range.")
+        return
     render_panel(
-        "Total Distance | Metres per Minute",
-        charts.chart_total_distance(gps_player_display, gps_player_full),
-        key="ov_total_distance",
-        legend_items=charts.LEGEND_TOTAL_DISTANCE,
-        box_note="ACWR",
-    )
-with top_right:
-    render_panel(
-        "HSR (Velocity Band 4 + 5) | Sprint Distance",
-        charts.chart_hsr_sd(gps_player_display, gps_player_full),
-        key="ov_hsr_sd",
-        legend_items=charts.LEGEND_HSR_SD,
-        box_note="ACWR",
+        title,
+        charts.chart_daily_count(gps_player_display, col, color, title),
+        key=key,
+        legend_items=legend,
     )
 
-bottom_left, bottom_right = st.columns(2)
-with bottom_left:
-    # for the 2-3 version, swap "B1-3" for "B2-3" in both column names and use legend_accel_decel("2-3")
-    render_panel(
-        "Accelerations (1-3) | Decelerations (1-3)",
-        charts.chart_accel_decel(
-            gps_player_display, gps_player_full,
-            "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
-        ),
-        key="ov_accel_decel",
-        legend_items=charts.legend_accel_decel("1-3"),
-        box_note="ACWR",
-    )
-with bottom_right:
-    render_panel(
-        "Max Speed | Max Speed %",
-        charts.chart_max_speed(gps_player_display, gps_player_full),
-        key="ov_max_speed",
-        legend_items=charts.LEGEND_MAX_SPEED,
-        box_note="Days Since 90%+",
-    )
+
+if view == "Outfield":
+    top_left, top_right = st.columns(2)
+    with top_left:
+        render_panel(
+            "Total Distance | Metres per Minute",
+            charts.chart_total_distance(gps_player_display, gps_player_full),
+            key="ov_total_distance",
+            legend_items=charts.LEGEND_TOTAL_DISTANCE,
+            box_note="ACWR",
+        )
+    with top_right:
+        render_panel(
+            "HSR (Velocity Band 4 + 5) | Sprint Distance",
+            charts.chart_hsr_sd(gps_player_display, gps_player_full),
+            key="ov_hsr_sd",
+            legend_items=charts.LEGEND_HSR_SD,
+            box_note="ACWR",
+        )
+
+    bottom_left, bottom_right = st.columns(2)
+    with bottom_left:
+        # for the 2-3 version, swap "B1-3" for "B2-3" in both column names and use legend_accel_decel("2-3")
+        render_panel(
+            "Accelerations (1-3) | Decelerations (1-3)",
+            charts.chart_accel_decel(
+                gps_player_display, gps_player_full,
+                "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+            ),
+            key="ov_accel_decel",
+            legend_items=charts.legend_accel_decel("1-3"),
+            box_note="ACWR",
+        )
+    with bottom_right:
+        render_panel(
+            "Max Speed | Max Speed %",
+            charts.chart_max_speed(gps_player_display, gps_player_full),
+            key="ov_max_speed",
+            legend_items=charts.LEGEND_MAX_SPEED,
+            box_note="Days Since 90%+",
+        )
+
+else:  # Goalkeeper view
+    top_left, top_right = st.columns(2)
+    with top_left:
+        render_panel(
+            "Total Distance | Metres per Minute",
+            charts.chart_total_distance(gps_player_display, gps_player_full),
+            key="gk_total_distance",
+            legend_items=charts.LEGEND_TOTAL_DISTANCE,
+            box_note="ACWR",
+        )
+    with top_right:
+        render_panel(
+            "Accelerations (1-3) | Decelerations (1-3)",
+            charts.chart_accel_decel(
+                gps_player_display, gps_player_full,
+                "Acceleration B1-3 Total Efforts (Gen 2)", "Deceleration B1-3 Total Efforts (Gen 2)",
+            ),
+            key="gk_accel_decel",
+            legend_items=charts.legend_accel_decel("1-3"),
+            box_note="ACWR",
+        )
+
+    bottom_left, bottom_right = st.columns(2)
+    with bottom_left:
+        count_panel("Dives", "Dives (L+C+R)", "gk_dives", charts.GOLD, charts.LEGEND_DIVES)
+    with bottom_right:
+        count_panel("Jumps", "Total Jumps", "gk_jumps", charts.GREEN, charts.LEGEND_JUMPS)
