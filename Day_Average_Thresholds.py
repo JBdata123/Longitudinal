@@ -58,7 +58,7 @@ except ImportError:
 # ============================================================================
 DAY_TYPES = ["Activation", "Extensive", "Intensive", "MD-1", "MD"]     # the days you can export, as written in the GPS file's Day column
 EXCLUDE_WEEKS = [19]                 # test data weeks, always left out (as in your Power BI weekly card)
-DEFAULT_MIN_SESSIONS = 3             # fewer Fit sessions than this and a player is left blank
+DEFAULT_MIN_SESSIONS = 3             # fewer Fit sessions than this and a player is left blank (can be set to 0 on the page)
 CACHE_TTL_SECONDS = 60
 
 # If a player's name in the GPS file is spelt differently from your Catapult list, say so here, as
@@ -470,9 +470,9 @@ def main():
     with c2:
         mode = st.radio("Export", [MODE_AVERAGE, MODE_PLUS, MODE_MINUS], key="mode")
     with c3:
-        min_sessions = st.number_input("Minimum Fit sessions per player", min_value=1, max_value=10,
+        min_sessions = st.number_input("Minimum Fit sessions per player", min_value=0, max_value=10,
                                        value=DEFAULT_MIN_SESSIONS, step=1, key="min_sessions",
-                                       help="A player with fewer Fit sessions than this on that day is left blank.")
+                                       help="A player with fewer sessions than this on that day is left blank. Set it to 0 to include every player who has any.")
     part = PART_WHOLE
     if normal_day(day) == "MD":
         part = st.radio("Part of the match", [PART_WHOLE, PART_HALF], horizontal=True, key="part",
@@ -492,8 +492,15 @@ def main():
                                         disabled=not fit_known)
         include_goalkeepers = st.checkbox("Include goalkeepers", value=True, key="goalkeepers")
 
+    # Match days aren't tracked in the Squad Availability file, so on MD a day with no status is always counted
+    # (a player who IS marked injured / modified / international on that day is still left out).
+    is_match_day = normal_day(day) == "MD"
+    count_no_status = include_no_status or not fit_known or is_match_day
+    if is_match_day and fit_known:
+        st.caption("Match days aren't tracked in the availability file, so matches with no status recorded are counted "
+                   "(anyone marked injured, modified or international that day is still left out).")
     stats, counts = day_stats(sessions, day, first_week, last_week, today, leave_out=leave_out,
-                              include_no_status=include_no_status or not fit_known, part=part)
+                              include_no_status=count_no_status, part=part)
     table = build_table(roster, stats, MODE_SIGN[mode], int(min_sessions), include_goalkeepers)
 
     # ------------------------------------------------------------ the CSV
@@ -506,7 +513,7 @@ def main():
                f"the rest are blank, as in your Catapult file.")
     st.caption(f"{counts['all']} {day_label} {'rows' if part == PART_HALF else 'sessions'} in those weeks: {counts['used']} counted"
                + (f", {counts['other_status']} left out because the player wasn't Fit (injured, modified, off...)" if counts["other_status"] else "")
-               + (f", {counts['no_status']} {'counted' if include_no_status or not fit_known else 'left out'} with no status recorded" if counts["no_status"] else "")
+               + (f", {counts['no_status']} {'counted' if count_no_status else 'left out'} with no status recorded" if counts["no_status"] else "")
                + ".")
     for note in metric_notes:
         st.warning(note)
