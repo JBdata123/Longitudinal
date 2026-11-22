@@ -1,7 +1,7 @@
 """
 Day Average Thresholds -- ONE file, reads straight from your Dropbox GPS file. Nothing to upload.
 
-For one type of training day (Activation, Extensive, Intensive or MD-1) it works out each player's AVERAGE for five
+For one type of day (Activation, Extensive, Intensive, MD-1 or MD, the match day) it works out each player's AVERAGE for five
 measures, counting only the sessions where that player was marked FIT, and gives you a CSV in exactly the layout of
 your Catapult athlete thresholds file, ready to import:
 
@@ -10,6 +10,11 @@ your Catapult athlete thresholds file, ready to import:
 
 Three exports to choose from: the day average, the average plus one standard deviation, or the average minus one
 standard deviation (a normal-for-this-player range to show against in Catapult).
+
+Match day (MD)
+  * Pick MD and you can average the WHOLE match (the SESSION rows, as for the other days) or the 1ST HALF only (the
+    rows whose Period Name is exactly "1st Half"). The average, average + 1 standard deviation and average - 1
+    standard deviation exports all work the same way, and Very High Speed Distance (sprint distance) is still included.
 
 The measures
   * High Speed Distance      = velocity band 4 + band 5 distance
@@ -51,7 +56,7 @@ except ImportError:
 # ============================================================================
 # SETTINGS
 # ============================================================================
-DAY_TYPES = ["Activation", "Extensive", "Intensive", "MD-1"]     # the days you can export, as written in the GPS file's Day column
+DAY_TYPES = ["Activation", "Extensive", "Intensive", "MD-1", "MD"]     # the days you can export, as written in the GPS file's Day column
 EXCLUDE_WEEKS = [19]                 # test data weeks, always left out (as in your Power BI weekly card)
 DEFAULT_MIN_SESSIONS = 3             # fewer Fit sessions than this and a player is left blank
 CACHE_TTL_SECONDS = 60
@@ -119,6 +124,8 @@ OUT_COLUMNS = ["Athlete ID", "Athlete Name", "Position"] + METRIC_NAMES
 REQUIRED_COLUMNS = ["Player Name", "Date", "Period Name", "Week Number", "Day"]
 GPS_COLUMNS = REQUIRED_COLUMNS + [part for _, parts in METRICS for part in parts]
 
+PART_WHOLE = "Whole match"
+PART_HALF = "1st half only"
 MODE_AVERAGE = "Day average"
 MODE_PLUS = "Day average + 1 standard deviation"
 MODE_MINUS = "Day average - 1 standard deviation"
@@ -204,16 +211,18 @@ def build_csv(table):
 # THE GPS FILE -> ONE ROW PER SESSION
 # ============================================================================
 def session_rows(gps):
-    """From the raw GPS sheet: one row per SESSION row, with the five measures worked out. A measure's figure is blank
+    """From the raw GPS sheet: one row per SESSION row (and per 1st Half row, marked period 'half1'), with the five measures worked out. A measure's figure is blank
     if none of its columns are in the file. Returns (rows, number of unreadable dates, notes about missing columns)."""
     d = gps.copy()
     parsed = read_dates(d["Date"])
     unreadable = int(parsed.isna().sum() - d["Date"].isna().sum())
     d["session_date"] = [x.date() if pd.notna(x) else None for x in parsed]
-    d = d[d["Period Name"].astype(str).str.strip().str.casefold() == "session"]
+    label = d["Period Name"].astype(str).str.strip().str.casefold()
+    d["period"] = label.map({"session": "session", "1st half": "half1"})      # whole-session rows, and 1st Half rows
+    d = d[d["period"].notna()]
     d = d[d["Player Name"].notna() & d["session_date"].notna()]
     out = pd.DataFrame({
-        "player": d["Player Name"].astype(str).str.strip(), "session_date": d["session_date"],
+        "player": d["Player Name"].astype(str).str.strip(), "session_date": d["session_date"], "period": d["period"],
         "week": pd.to_numeric(d["Week Number"], errors="coerce"), "day": d["Day"],
     })
     notes = []
@@ -251,15 +260,18 @@ def normal_day(label):
 
 
 def available_weeks(rows, today, exclude_weeks=EXCLUDE_WEEKS):
-    d = rows[[x is not None and x <= today for x in pd.to_datetime(rows["session_date"]).dt.date]]
+    d = rows[rows["period"] == "session"]
+    d = d[[x is not None and x <= today for x in pd.to_datetime(d["session_date"]).dt.date]]
     weeks = pd.to_numeric(d["week"], errors="coerce").dropna()
     return sorted({int(w) for w in weeks if w > 0 and w not in exclude_weeks})
 
 
-def day_stats(rows, day, first_week, last_week, today, leave_out=(), include_no_status=False, exclude_weeks=EXCLUDE_WEEKS):
+def day_stats(rows, day, first_week, last_week, today, leave_out=(), include_no_status=False, exclude_weeks=EXCLUDE_WEEKS,
+              part=PART_WHOLE):
     """Each player's average and standard deviation of the five measures on one type of day, over their Fit sessions.
     Returns (stats, counts): stats is keyed by person_key with 'player', 'sessions', '<measure>|mean' and '<measure>|sd'."""
     d = rows.copy()
+    d = d[d["period"] == ("half1" if part == PART_HALF else "session")]       # whole day, or the 1st Half rows only
     d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
     d = d[[x is not None and x <= today for x in d["session_date"]]]
     d["week"] = pd.to_numeric(d["week"], errors="coerce")
@@ -461,6 +473,11 @@ def main():
         min_sessions = st.number_input("Minimum Fit sessions per player", min_value=1, max_value=10,
                                        value=DEFAULT_MIN_SESSIONS, step=1, key="min_sessions",
                                        help="A player with fewer Fit sessions than this on that day is left blank.")
+    part = PART_WHOLE
+    if normal_day(day) == "MD":
+        part = st.radio("Part of the match", [PART_WHOLE, PART_HALF], horizontal=True, key="part",
+                        help="Whole match uses the SESSION row for each match day. 1st half only uses the rows whose "
+                             "Period Name is exactly '1st Half'.")
     c4, c5 = st.columns([3, 3])
     with c4:
         if len(weeks) > 1:
@@ -476,17 +493,18 @@ def main():
         include_goalkeepers = st.checkbox("Include goalkeepers", value=True, key="goalkeepers")
 
     stats, counts = day_stats(sessions, day, first_week, last_week, today, leave_out=leave_out,
-                              include_no_status=include_no_status or not fit_known)
+                              include_no_status=include_no_status or not fit_known, part=part)
     table = build_table(roster, stats, MODE_SIGN[mode], int(min_sessions), include_goalkeepers)
 
     # ------------------------------------------------------------ the CSV
     csv_bytes = build_csv(table)
     filled = int(table[[f"out_{n}" for n in METRIC_NAMES]].notna().any(axis=1).sum())
     st.download_button("Download CSV for Catapult", data=csv_bytes,
-                       file_name=f"athlete_thresholds_{day.lower()}_{MODE_FILE[mode]}.csv", mime="text/csv", type="primary", key="download")
-    st.caption(f"{day}, weeks {first_week} to {last_week}. {filled} of {len(table)} athletes have numbers in the file; "
+                       file_name=f"athlete_thresholds_{day.lower()}{'_1st_half' if part == PART_HALF else ''}_{MODE_FILE[mode]}.csv", mime="text/csv", type="primary", key="download")
+    day_label = f"{day} (1st half only)" if part == PART_HALF else day
+    st.caption(f"{day_label}, weeks {first_week} to {last_week}. {filled} of {len(table)} athletes have numbers in the file; "
                f"the rest are blank, as in your Catapult file.")
-    st.caption(f"{counts['all']} {day} sessions in those weeks: {counts['used']} counted"
+    st.caption(f"{counts['all']} {day_label} {'rows' if part == PART_HALF else 'sessions'} in those weeks: {counts['used']} counted"
                + (f", {counts['other_status']} left out because the player wasn't Fit (injured, modified, off...)" if counts["other_status"] else "")
                + (f", {counts['no_status']} {'counted' if include_no_status or not fit_known else 'left out'} with no status recorded" if counts["no_status"] else "")
                + ".")
