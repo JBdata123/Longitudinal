@@ -24,6 +24,14 @@ How it decides
   * "Still to do" = average week minus what they'd done by MD-1 (blank if they're already there).
   * High speed running = velocity band 4 + band 5 distance, as everywhere else in your reports.
 
+New: you can now choose how far to count.
+  * Up to MD-1 (training only)  - the original view: what each player still needs on match day.
+  * MD-1 plus the 1st half of the match  - a half-time view: what each player still needs in the 2nd half
+    to reach their average week, after what they did in the 1st half.
+  * MD-1 plus the whole match day  - the full week including the match.
+  The page also shows what they did in the match itself, and sprint distance (SD) alongside HSR. A tick box
+  lets you add SD on top of HSR (band 4 + band 5 + SD) if that's how you want high speed counted.
+
 Needs the [dropbox] secrets your other pages already use (refresh_token, app_key, app_secret and
 gps_path). availability_path is optional: if it's there, the Fit-players-only rule is applied.
 """
@@ -97,6 +105,10 @@ ROSTER = [
 OUT_COLUMNS = ["Athlete ID", "Athlete Name", "Position", "Total Distance", "High Speed Distance"]
 GPS_COLUMNS = ["Player Name", "Date", "Period Name", "Week Number", "Day", "Total Distance",
                "Velocity Band 4 Total Distance", "Velocity Band 5 Total Distance"]
+OPTIONAL_SD_COLUMNS = ["Sprint Distance", "SD"]     # the sprint distance column, whichever of these your GPS file has (optional)
+OPT_MD1 = "Up to MD-1 (training only)"
+OPT_HALF = "MD-1 plus the 1st half of the match (half-time view)"
+OPT_MD = "MD-1 plus the whole match day"
 MODE_STILL = "What they still need on match day (to reach their average week)"
 MODE_AVERAGE = "Their full average week"
 
@@ -180,22 +192,27 @@ def build_csv(table):
 # THE GPS FILE -> ONE ROW PER SESSION
 # ============================================================================
 def session_rows(gps):
-    """From the raw GPS sheet: one row per SESSION row (the whole-session figures). High speed running = velocity
-    band 4 + band 5 distance (blank only if both are blank). Returns (rows, number of rows with an unreadable date)."""
+    """From the raw GPS sheet: the whole-session rows (period 'session') AND the 1st Half rows (period 'half1').
+    High speed running = velocity band 4 + band 5 distance (blank only if both are blank). Sprint distance (sd) is
+    read too if the file has it. Returns (rows, number of rows with an unreadable date)."""
     d = gps.copy()
     parsed = read_dates(d["Date"])
     unreadable = int(parsed.isna().sum() - d["Date"].isna().sum())
     d["session_date"] = [x.date() if pd.notna(x) else None for x in parsed]
-    d = d[d["Period Name"].astype(str).str.strip().str.casefold() == "session"]
+    label = d["Period Name"].astype(str).str.strip().str.casefold()
+    d["period"] = label.map({"session": "session", "1st half": "half1"})
+    d = d[d["period"].notna()]
     d = d[d["Player Name"].notna() & d["session_date"].notna()]
     band4 = pd.to_numeric(d["Velocity Band 4 Total Distance"], errors="coerce")
     band5 = pd.to_numeric(d["Velocity Band 5 Total Distance"], errors="coerce")
     hsr = band4.fillna(0) + band5.fillna(0)
     hsr[band4.isna() & band5.isna()] = float("nan")
+    sd_column = next((c for c in OPTIONAL_SD_COLUMNS if c in d.columns), None)
+    sd = pd.to_numeric(d[sd_column], errors="coerce") if sd_column else float("nan")
     rows = pd.DataFrame({
-        "player": d["Player Name"].astype(str).str.strip(), "session_date": d["session_date"],
+        "player": d["Player Name"].astype(str).str.strip(), "session_date": d["session_date"], "period": d["period"],
         "week": pd.to_numeric(d["Week Number"], errors="coerce"), "day": d["Day"],
-        "total_distance": pd.to_numeric(d["Total Distance"], errors="coerce"), "hsr": hsr,
+        "total_distance": pd.to_numeric(d["Total Distance"], errors="coerce"), "hsr": hsr, "sd": sd,
     }).reset_index(drop=True)
     return rows, unreadable
 
@@ -220,23 +237,31 @@ def _fit_rows(d):
     return d[status.isna() | (status == "") | (status == "fit")]       # no status recorded counts as available
 
 
-def weekly_totals(rows, through, fit_only=True):
-    """One row per player per week: how many SESSIONs, and the total distance and high speed distance,
-    counting sessions up to and including the day `through`."""
+def weekly_totals(rows, through, fit_only=True, half_day=None):
+    """One row per player per week: how many SESSIONs, and the total distance, high speed distance and sprint
+    distance, counting sessions up to and including the day `through`. If half_day is given, that day's 1st Half
+    rows are counted too (they add to the totals but not to the session count)."""
     d = rows.copy()
     d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
-    d = d[pd.Series([x is not None and x <= through for x in d["session_date"]], index=d.index, dtype=bool)]
+    is_session = d["period"] == "session"
+    before = pd.Series([x is not None and x <= through for x in d["session_date"]], index=d.index, dtype=bool)
+    keep = is_session & before
+    if half_day is not None:
+        keep = keep | ((d["period"] == "half1") & (d["session_date"] == half_day))
+    d = d[keep].copy()
+    d["is_session"] = (d["period"] == "session").astype(int)
     d["week"] = pd.to_numeric(d["week"], errors="coerce")
     d["total_distance"] = pd.to_numeric(d["total_distance"], errors="coerce")
     d["hsr"] = pd.to_numeric(d["hsr"], errors="coerce")
+    d["sd"] = pd.to_numeric(d["sd"], errors="coerce")
     d = d.dropna(subset=["player", "week", "total_distance"])
     if fit_only:
         d = _fit_rows(d)
     d["key"] = d["player"].map(resolve_key)
     g = d.groupby(["key", "week"])
     weekly = pd.DataFrame({
-        "player": g["player"].first(), "sessions": g.size(),
-        "td": g["total_distance"].sum(), "hsr": g["hsr"].sum(min_count=1),
+        "player": g["player"].first(), "sessions": g["is_session"].sum(),
+        "td": g["total_distance"].sum(), "hsr": g["hsr"].sum(min_count=1), "sd": g["sd"].sum(min_count=1),
     }).reset_index()
     weekly["squad_max_sessions"] = weekly.groupby("week")["sessions"].transform("max")
     weekly["full_week"] = weekly["sessions"] == weekly["squad_max_sessions"]
@@ -256,6 +281,20 @@ def md_minus_one_dates(rows, today):
     return sorted({x for x in d["session_date"] if x is not None and x <= today}, reverse=True)
 
 
+def _is_match_day(label):
+    """True for a plain MD (match day) label, however it's been typed. MD-1, MD+1 and so on are not match days."""
+    return re.sub(r"\s+", "", str(label or "")).upper() == "MD"
+
+
+def match_day_after(rows, md_minus_one, today):
+    """The match day that follows an MD-1 day (the first MD in the next 7 days, up to today), or None."""
+    d = rows.copy()
+    d["session_date"] = pd.to_datetime(d["session_date"]).dt.date
+    d = d[d["day"].map(_is_match_day)]
+    days = sorted({x for x in d["session_date"] if x is not None and md_minus_one < x <= min(today, md_minus_one + dt.timedelta(days=7))})
+    return days[0] if days else None
+
+
 def week_of(rows, day):
     """The GPS week number of a day (the most common one, if the rows that day disagree), or None."""
     d = rows.copy()
@@ -270,15 +309,16 @@ def latest_session_day(rows, today):
     return max(days) if days else None
 
 
-def week_summary(rows, week, through, exclude_weeks=EXCLUDE_WEEKS, fit_only=True):
+def week_summary(rows, week, through, exclude_weeks=EXCLUDE_WEEKS, fit_only=True, half_day=None):
     """Per player (keyed by person_key): their average week, this week's total up to and including the day
-    `through` (MD-1), and what's still to do."""
-    weekly = weekly_totals(rows, through, fit_only=fit_only)
+    `through` (plus the 1st half of `half_day`, if given), and what's still to do."""
+    weekly = weekly_totals(rows, through, fit_only=fit_only, half_day=half_day)
     history = weekly[(weekly["week"] > 0) & (weekly["week"] < week) & (~weekly["week"].isin(exclude_weeks))
                      & weekly["full_week"]]
-    average = history.groupby("key").agg(avg_td=("td", "mean"), avg_hsr=("hsr", "mean"), weeks_used=("week", "nunique"))
-    now = weekly[weekly["week"] == week].set_index("key")[["player", "sessions", "td", "hsr"]]
-    now = now.rename(columns={"sessions": "sessions_this_week", "td": "so_far_td", "hsr": "so_far_hsr"})
+    average = history.groupby("key").agg(avg_td=("td", "mean"), avg_hsr=("hsr", "mean"), avg_sd=("sd", "mean"),
+                                         weeks_used=("week", "nunique"))
+    now = weekly[weekly["week"] == week].set_index("key")[["player", "sessions", "td", "hsr", "sd"]]
+    now = now.rename(columns={"sessions": "sessions_this_week", "td": "so_far_td", "hsr": "so_far_hsr", "sd": "so_far_sd"})
     out = now.join(average, how="left")
     out["weeks_used"] = out["weeks_used"].fillna(0).astype(int)
     out["remaining_td"] = (out["avg_td"] - out["so_far_td"]).clip(lower=0)
@@ -295,7 +335,7 @@ def _whole(value):
     return rounded if rounded > 0 else None
 
 
-def build_table(roster, summary, mode=MODE_STILL):
+def build_table(roster, summary, mode=MODE_STILL, when="on match day"):
     """One row per athlete in your list's order: what goes in the CSV, plus the numbers behind it and a note."""
     rows = []
     for athlete in roster.itertuples():
@@ -304,17 +344,19 @@ def build_table(roster, summary, mode=MODE_STILL):
         base = {"athlete_id": athlete.athlete_id, "athlete_name": athlete.athlete_name, "position": position,
                 "sessions": None, "weeks_used": None, "avg_td": None, "so_far_td": None, "remaining_td": None,
                 "avg_hsr": None, "so_far_hsr": None, "remaining_hsr": None,
+                "avg_sd": None, "so_far_sd": None,
                 "csv_total_distance": None, "csv_high_speed": None}
         if SKIP_POSITIONS_CONTAINING in position.casefold():
             rows.append({**base, "note": "Goalkeeper - left blank"})
             continue
         if key not in summary.index:
-            rows.append({**base, "note": "No Fit session this week up to MD-1 (or name not found in the GPS data)"})
+            rows.append({**base, "note": "No Fit session this week up to the cut-off (or name not found in the GPS data)"})
             continue
         s = summary.loc[key]
         base.update({"sessions": int(s["sessions_this_week"]), "weeks_used": int(s["weeks_used"]),
                      "avg_td": s["avg_td"], "so_far_td": s["so_far_td"], "remaining_td": s["remaining_td"],
-                     "avg_hsr": s["avg_hsr"], "so_far_hsr": s["so_far_hsr"], "remaining_hsr": s["remaining_hsr"]})
+                     "avg_hsr": s["avg_hsr"], "so_far_hsr": s["so_far_hsr"], "remaining_hsr": s["remaining_hsr"],
+                     "avg_sd": s["avg_sd"], "so_far_sd": s["so_far_sd"]})
         if int(s["weeks_used"]) == 0:
             rows.append({**base, "note": "No full earlier week to average yet"})
             continue
@@ -324,7 +366,7 @@ def build_table(roster, summary, mode=MODE_STILL):
         if mode == MODE_STILL and td is None and hsr is None:
             note = "Already at their average week"
         elif mode == MODE_STILL:
-            note = "Needs this on match day"
+            note = f"Needs this {when}"
         else:
             note = "Average week"
         rows.append({**base, "note": note})
@@ -367,7 +409,7 @@ def read_table(content, path, wanted):
 def load_sessions():
     path = st.secrets["dropbox"]["gps_path"]
     _, response = dropbox_client().files_download(path)
-    gps = read_table(response.content, path, GPS_COLUMNS)
+    gps = read_table(response.content, path, GPS_COLUMNS + OPTIONAL_SD_COLUMNS)
     missing = [c for c in GPS_COLUMNS if c not in gps.columns]
     if missing:
         raise ValueError("the GPS file is missing these columns: " + ", ".join(missing))
@@ -449,7 +491,7 @@ def main():
         cut_days = md_minus_one_dates(sessions, today)
         if cut_days:
             labels = {f"{d:%a %d/%m/%Y} (MD-1), week {week_of(sessions, d)}": d for d in cut_days}
-            cutoff = labels[st.selectbox("Counted up to and including", list(labels), key="cutoff")]
+            cutoff = labels[st.selectbox("Week (picked by its MD-1)", list(labels), key="cutoff")]
         else:
             st.warning("No MD-1 day found in the GPS file, so choose the last day to count instead.")
             fallback = latest_session_day(sessions, today) or today
@@ -467,39 +509,96 @@ def main():
             fit_only = False
             st.caption("Injured and modified players aren't being left out, because there's no availability_path in "
                        "your secrets.")
+        has_sd = bool(sessions["sd"].notna().any())
+        include_sd = st.checkbox("Add sprint distance (SD) on top of HSR", value=False, key="include_sd",
+                                 disabled=not has_sd,
+                                 help="Off: high speed = velocity band 4 + band 5. On: band 4 + band 5 + SD, "
+                                      "as in your Power BI HSR + SD charts.") if has_sd else False
+        if not has_sd:
+            st.caption("No sprint distance column found in the GPS file (looked for: " + ", ".join(OPTIONAL_SD_COLUMNS) + ").")
     with c3:
         mode = st.radio("Numbers to put in the CSV", [MODE_STILL, MODE_AVERAGE], key="mode")
 
-    summary = week_summary(sessions, week, cutoff, fit_only=fit_only)
-    table = build_table(roster, summary, mode)
+    count_option = st.radio("How far to count", [OPT_MD1, OPT_HALF, OPT_MD], horizontal=True, key="count_option",
+                            help="The match day is the MD day that follows the MD-1 you picked. The 1st half option adds "
+                                 "only that match's 1st Half rows, so you can see what's still needed in the 2nd half.")
+    match_day = match_day_after(sessions, cutoff, today)
+    through, half_day, when = cutoff, None, "on match day"
+    if count_option != OPT_MD1 and match_day is None:
+        st.warning(f"No match day (MD) found in the GPS file after {cutoff:%d/%m/%Y} yet, so this is counting up to "
+                   f"MD-1 only.")
+    elif count_option == OPT_HALF:
+        half_day, when = match_day, "in the 2nd half"
+        if not ((sessions["period"] == "half1") & (sessions["session_date"] == match_day)).any():
+            st.warning(f"No 1st Half rows found for {match_day:%d/%m/%Y} yet, so this is counting up to MD-1 only.")
+    elif count_option == OPT_MD:
+        through, when = match_day, "after the match"
+
+    used = sessions.copy()
+    if include_sd:
+        used["hsr"] = used["hsr"].fillna(0) + used["sd"].fillna(0)
+        used.loc[sessions["hsr"].isna() & sessions["sd"].isna(), "hsr"] = float("nan")
+
+    summary = week_summary(used, week, through, fit_only=fit_only, half_day=half_day)
+    table = build_table(roster, summary, mode, when=when)
+
+    # what the players did in the match itself (the part counted beyond MD-1)
+    base = week_summary(used, week, cutoff, fit_only=fit_only)
+    def match_part(column):
+        out = {}
+        for name in table["athlete_name"]:
+            key = person_key(name)
+            now = summary[column].get(key) if key in summary.index else None
+            before = base[column].get(key) if key in base.index else None
+            out[name] = None if now is None or pd.isna(now) else float(now) - (0 if before is None or pd.isna(before) else float(before))
+        return table["athlete_name"].map(out)
+    for column in ("so_far_td", "so_far_hsr", "so_far_sd"):
+        table["match_" + column] = match_part(column) if count_option != OPT_MD1 and match_day is not None else None
 
     # ------------------------------------------------------------ the CSV
     csv_bytes = build_csv(table)
     filled = int(((table["csv_total_distance"].notna()) | (table["csv_high_speed"].notna())).sum())
     st.download_button("Download CSV for Catapult", data=csv_bytes, file_name=f"athlete_thresholds_week_{week}.csv",
                        mime="text/csv", type="primary", key="download")
-    st.caption(f"Week {week}, counted up to and including {cutoff:%A %d/%m/%Y}; match day and anything after it are not "
-               f"counted. {filled} of {len(table)} athletes have a number in the file; the rest are blank, as in your "
-               f"Catapult file (goalkeepers, players already at their average, or no data)."
-               + (" This week is pre-season, so there is no earlier in-season week to average." if week <= 0 else ""))
+    if count_option == OPT_HALF and half_day:
+        counted = f"counted up to and including MD-1 ({cutoff:%A %d/%m/%Y}) plus the 1st half of the match on {half_day:%A %d/%m/%Y}"
+    elif count_option == OPT_MD and through != cutoff:
+        counted = f"counted up to and including the match day, {through:%A %d/%m/%Y}"
+    else:
+        counted = f"counted up to and including {cutoff:%A %d/%m/%Y}; match day and anything after it are not counted"
+    st.caption(f"Week {week}, {counted}. {filled} of {len(table)} athletes have a number in the file; the rest are blank, "
+               f"as in your Catapult file (goalkeepers, players already at their average, or no data)."
+               + (" This week is pre-season, so there is no earlier in-season week to average." if week <= 0 else "")
+               + (" High speed includes sprint distance." if include_sd else ""))
 
     # ------------------------------------------------------------ the numbers behind it
     def whole(series):
         return [None if pd.isna(v) else int(round(v)) for v in series]
-    shown = pd.DataFrame({
+    columns = {
         "Athlete": table["athlete_name"], "Position": table["position"],
         "Sessions counted": table["sessions"], "Earlier weeks used": table["weeks_used"],
         "Distance: average week": whole(table["avg_td"]), "Distance: so far": whole(table["so_far_td"]),
         "Distance: still to do": whole(table["remaining_td"]),
         "HSR: average week": whole(table["avg_hsr"]), "HSR: so far": whole(table["so_far_hsr"]),
         "HSR: still to do": whole(table["remaining_hsr"]),
-        "Note": table["note"],
-    })
+    }
+    if has_sd:
+        columns["SD: average week"] = whole(table["avg_sd"])
+        columns["SD: so far"] = whole(table["so_far_sd"])
+    if count_option != OPT_MD1 and match_day is not None:
+        label = "1st half" if count_option == OPT_HALF else "match"
+        columns[f"Distance: {label}"] = whole(table["match_so_far_td"])
+        columns[f"HSR: {label}"] = whole(table["match_so_far_hsr"])
+        if has_sd:
+            columns[f"SD: {label}"] = whole(table["match_so_far_sd"])
+    columns["Note"] = table["note"]
+    shown = pd.DataFrame(columns)
     st.dataframe(shown, width="stretch", hide_index=True, height=min(900, 38 * (len(shown) + 1) + 3))
-    st.caption("So far = what the player had done by the cut-off day. Average week = the average of the player's "
+    st.caption("So far = what the player had done by the cut-off. Average week = the average of the player's "
                "own weekly totals over earlier weeks (full weeks only, SESSION rows, week 19 test data left out). "
-               "Still to do = average week minus so far. High speed running = velocity band 4 + 5 distance. "
-               "Metres, per player.")
+               "Still to do = average week minus so far. High speed running = velocity band 4 + 5 distance"
+               + (" plus sprint distance" if include_sd else "") + ". The 1st half / match columns show what the "
+               "player did in that part of the match day. Metres, per player.")
 
     # ------------------------------------------------------------ so nothing is silently missing
     unmatched = [n for n, note in zip(table["athlete_name"], table["note"]) if note.startswith("No Fit session")]
